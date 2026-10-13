@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.apk
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+proxy-debug.log
+vite-stdout.log
+android-build.log
+gradle-help.log
+.playwright-cli/
+mock-dav/

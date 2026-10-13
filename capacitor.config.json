@@ -1,0 +1,13 @@
+{
+  "appId": "com.examprep.app",
+  "appName": "考证刷题",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

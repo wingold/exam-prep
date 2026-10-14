@@ -41,9 +41,9 @@ const ringStyle = computed(() => {
 const phaseText = computed(() => {
   const t = task.value
   if (!t) return ''
-  if (t.phase === 'extracting') return '正在提取 PDF 文本…'
-  if (t.phase === 'generating') return `AI 出题中 ${t.idx}/${t.total} 段`
-  if (t.phase === 'done') return t.kind === 'pdf' ? '生成完成！' : '已生成专项题库！'
+  if (t.phase === 'extracting') return '正在提取文本…'
+  if (t.phase === 'generating') return `AI 生成中 ${t.idx}/${t.total} 段`
+  if (t.phase === 'done') return t.kind === 'pdf' ? '题目生成完成！' : t.kind === 'cards' ? '卡片摘取完成！' : '已生成专项题库！'
   if (t.phase === 'error') return '生成失败'
   if (t.phase === 'cancelled') return t.got ? '已取消（保留部分结果）' : '已取消'
   return ''
@@ -113,6 +113,8 @@ function viewResult() {
   panelOpen.value = false
   if (t.kind === 'pdf') {
     router.push('/banks') // Banks 挂载时消费 result → 预览
+  } else if (t.kind === 'cards') {
+    router.push('/cards') // Cards 挂载时消费 result → 预览
   } else {
     router.push('/practice?bank=' + t.result.bankId)
   }

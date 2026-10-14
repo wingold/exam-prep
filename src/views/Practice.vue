@@ -64,7 +64,7 @@ async function start() {
       alert(
         cardCount.value
           ? '今天没有到期的复习卡片。间隔复习不会天天有——可以先去练习刷题，答错的题会自动入队。'
-          : '还没有记忆卡片。答题时点「加入记忆卡」，或在上方把错题本一键入队。'
+          : '还没有题卡。答题时点「加入题卡复习」，或在上方把错题本一键入队。'
       )
       return
     }
@@ -214,7 +214,7 @@ async function enrollAllWrongs() {
   for (const w of wrongs) await enrollCard(w.questionId)
   due.value = await dueCount()
   cardCount.value = await db.cards.count()
-  alert(`已把 ${wrongs.length} 道错题加入记忆复习，明天起按间隔到期`)
+  alert(`已把 ${wrongs.length} 道错题加入题卡复习，明天起按间隔到期`)
 }
 
 function quit() {
@@ -237,7 +237,7 @@ function optionState(letter) {
   return ''
 }
 
-const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章节专项', unfinished: '未做题快练', review: '记忆复习' }
+const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章节专项', unfinished: '未做题快练', review: '题卡复习' }
 </script>
 
 <template>
@@ -281,22 +281,24 @@ const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章
           </button>
         </div>
 
-        <!-- 记忆复习使用说明 -->
+        <!-- 题卡复习使用说明 -->
         <div v-if="mode === 'review'" class="card" style="padding: 12px 14px; background: var(--accent-weak); border-color: transparent; margin-bottom: 8px">
           <div class="tiny" style="line-height: 1.7; color: var(--ink-2)">
-            <b style="color: var(--accent)">卡片怎么来：</b><br />
+            <b style="color: var(--accent)">题卡（复习的是题目，不是知识点卡片）：</b><br />
             ① 练习/模考答错的题<b>自动入队</b>，今天答错明天就会到期；<br />
-            ② 答题后点<b>「加入记忆卡」</b>可手动把任意题加入；<br />
-            ③ 一键把错题本全部转成记忆卡：
+            ② 答题后点<b>「加入题卡复习」</b>可手动把任意题加入；<br />
+            ③ 一键把错题本全部转成题卡：
             <button class="btn ghost sm" style="margin-left: 6px" :disabled="!wrongTotal" @click="enrollAllWrongs">
               错题全部入队（{{ wrongTotal }}）
             </button>
+            <br />
+            <span style="color: var(--ink-3)">背知识点请走「卡片」页的<b>知识卡片</b>（从讲义摘取的记忆点），两套互不相通。</span>
           </div>
           <div v-if="!due && cardCount" class="tiny" style="margin-top: 6px">
-            今天没有到期的卡片，最近一张将于未来几天到期——间隔复习本来就不该天天有。
+            今天没有到期的题卡，最近一张将于未来几天到期——间隔复习本来就不该天天有。
           </div>
           <div v-if="!cardCount" class="tiny" style="margin-top: 6px">
-            还没有卡片，先去练几题（答错自动入队），或用上面的按钮从错题本导入。
+            还没有题卡，先去练几题（答错自动入队），或用上面的按钮从错题本导入。
           </div>
         </div>
 
@@ -412,9 +414,9 @@ const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章
             :disabled="!!enrolledNow[cur.id] || session.review"
             @click="enrollCurrent"
           >
-            {{ enrolledNow[cur.id] ? '已加入记忆卡 ✓' : session.review ? '已在记忆队列中' : '加入记忆卡（间隔复习）' }}
+            {{ enrolledNow[cur.id] ? '已加入题卡复习 ✓' : session.review ? '已在题卡复习队列中' : '加入题卡复习（间隔复习）' }}
           </button>
-          <span class="tiny" v-if="!enrolledNow[cur.id] && !session.review">按遗忘曲线安排下次复习时间</span>
+          <span class="tiny" v-if="!enrolledNow[cur.id] && !session.review">按遗忘曲线安排下次复习时间；知识点背诵请用「卡片」页</span>
         </div>
         <div style="margin-top: 10px">
           <AiTutor :question="cur" :chosen="curChosen" />

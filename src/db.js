@@ -21,6 +21,20 @@ db.version(2).stores({
   cards: 'id, dueAt, updatedAt',
 })
 
+db.version(3).stores({
+  decks: 'id, name, createdAt',
+  noteCards: 'id, deckId, dueAt, updatedAt',
+})
+
+db.version(4).stores({
+  noteCards: 'id, deckId, dueAt, lastRatedAt, updatedAt',
+  plans: 'id, kind',
+})
+
+db.version(5).stores({
+  decks: 'id, name, subjectId, createdAt',
+})
+
 export default db
 
 export const uid = () =>
@@ -97,7 +111,8 @@ export async function subjectProgress(subjectId) {
 
 const TABLES = [
   'certificates', 'subjects', 'sessions', 'registrations', 'scores',
-  'banks', 'questions', 'attempts', 'papers', 'results', 'wrongItems', 'cards', 'meta',
+  'banks', 'questions', 'attempts', 'papers', 'results', 'wrongItems', 'cards',
+  'decks', 'noteCards', 'plans', 'meta',
 ]
 
 export async function exportAll() {

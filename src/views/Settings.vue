@@ -242,7 +242,7 @@ async function doImport(ev, mode) {
     <div class="card">
       <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 6px">关于</h3>
       <p class="muted">考证刷题助手 v0.2 · 本地存储，无账号无埋点</p>
-      <p class="tiny" style="margin-top: 6px">支持：题库导入 / 多模式练习 / 模考 / 错题本 / 记忆复习 / 成绩统计 / AI 讲题 / WebDAV 同步</p>
+      <p class="tiny" style="margin-top: 6px">支持：题库导入 / 多模式练习 / 模考 / 错题本 / 题卡复习 / 知识卡片 / 成绩统计 / AI 讲题 / WebDAV 同步</p>
     </div>
   </div>
 </template>

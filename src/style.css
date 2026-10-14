@@ -134,12 +134,12 @@ h1, h2, h3, h4, p { margin: 0; }
     flex-direction: column;
     align-items: center;
     gap: 2px;
-    font-size: 11px;
+    font-size: 10px;
     color: var(--ink-3);
     padding: 4px 0;
     border-radius: 8px;
   }
-  .bottomnav a .ico { font-size: 19px; line-height: 1; }
+  .bottomnav a .ico { font-size: 17px; line-height: 1; }
   .bottomnav a.on { color: var(--accent); font-weight: 600; }
 }
 

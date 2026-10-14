@@ -32,13 +32,9 @@ export async function enrollCard(questionId) {
   })
 }
 
-/* 评分调度 */
-export async function rateCard(questionId, rating) {
-  // rating: 'again' | 'hard' | 'good'
-  const card = await db.cards.get(questionId)
-  if (!card) return
-  let { intervalDays, ease, reps, lapses } = card
-
+/* 纯调度函数：题目卡与知识卡共用（SM-2 简化） */
+export function nextSchedule(card, rating) {
+  let { intervalDays = 0, ease = 2.5, reps = 0, lapses = 0 } = card
   if (rating === 'again') {
     intervalDays = 1
     ease = Math.max(1.3, ease - 0.2)
@@ -55,15 +51,14 @@ export async function rateCard(questionId, rating) {
     intervalDays = Math.min(intervalDays, 365)
     reps += 1
   }
+  return { intervalDays, ease, reps, lapses, dueAt: now() + intervalDays * DAY, updatedAt: now() }
+}
 
-  await db.cards.update(questionId, {
-    intervalDays,
-    ease,
-    reps,
-    lapses,
-    dueAt: now() + intervalDays * DAY,
-    updatedAt: now(),
-  })
+/* 评分调度 */
+export async function rateCard(questionId, rating) {
+  const card = await db.cards.get(questionId)
+  if (!card) return
+  await db.cards.update(questionId, nextSchedule(card, rating))
 }
 
 /* 今日到期的卡片（连题目一起返回） */

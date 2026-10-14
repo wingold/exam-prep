@@ -2,15 +2,15 @@
 
 import { reactive } from 'vue'
 import db, { uid, now } from './db'
-import { genQuestionsRaw, genWeakQuestions } from './aigen'
+import { genQuestionsRaw, genWeakQuestions, genCardsRaw } from './aigen'
 import { normalizeQuestion } from './importers'
 
-export const aiStore = reactive({
-  task: null,
-  // task: { id, kind:'pdf'|'drill', title, phase:'extracting'|'generating'|'done'|'error'|'cancelled',
-  //         idx, total, got, sectionTitle, error, warnings[], cancelled,
-  //         result:{ bankName?, bankId?, questions[], fileName?, warnings? }, consumed }
-})
+if (!globalThis.__examPrepAiStore) {
+  globalThis.__examPrepAiStore = reactive({
+    task: null,
+  })
+}
+export const aiStore = globalThis.__examPrepAiStore
 
 let seq = 0
 
@@ -127,6 +127,83 @@ export async function startDrillTask({ weakChapters, wrongStems = [], count = 8 
     task.phase = 'done'
     task.got = questions.length
     task.result = { bankId, bankName, questions }
+  } catch (e) {
+    task.phase = 'error'
+    task.error = e.message
+  }
+}
+
+/* ---------- 知识卡片：讲义文件 → AI 摘取知识点（后台） ---------- */
+
+export async function startCardsTask(file) {
+  const task = newTask({ kind: 'cards', title: file.name, phase: 'extracting' })
+  try {
+    let text = ''
+    const name = file.name.toLowerCase()
+    if (name.endsWith('.pdf')) {
+      const { extractPdfText } = await import('./pdfextract.js')
+      text = await extractPdfText(file)
+    } else if (name.endsWith('.docx')) {
+      const mammoth = await import('mammoth/mammoth.browser')
+      const { value } = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })
+      text = value
+    } else if (name.endsWith('.txt') || name.endsWith('.md')) {
+      text = await file.text()
+    } else {
+      throw new Error('AI 摘取支持 .pdf / .docx / .txt / .md；JSON/Excel 请用「导入卡片」')
+    }
+    if (!text.trim()) {
+      throw new Error(
+        '这份文件提取不到文字（PDF 可能是扫描版/图片型，暂不支持 OCR）。' +
+        '请改用带文字层的 PDF，或转成 Word/纯文本再试。'
+      )
+    }
+    const { splitSections, chunkSection } = await import('./pdfextract.js')
+    const sections = splitSections(text)
+    const jobs = []
+    ;(sections.length ? sections : [{ title: '', content: text.trim() }]).forEach((sec) =>
+      chunkSection(sec, 5000).forEach((c) => jobs.push(c))
+    )
+    task.phase = 'generating'
+    task.total = jobs.length
+
+    const all = []
+    for (let i = 0; i < jobs.length; i++) {
+      if (task.cancelled) break
+      const job = jobs[i]
+      task.idx = i + 1
+      task.sectionTitle = job.title || '前言/未命名段'
+      try {
+        const raw = await genCardsRaw(job.content, {
+          chapter: job.title,
+          count: Math.max(5, Math.min(12, Math.round(job.content.length / 900))),
+        })
+        const cards = raw
+          .map((c) => ({ ...c, chapter: c.chapter || job.title }))
+          .filter((c) => c.front && c.back)
+        all.push(...cards)
+        task.got = all.length
+      } catch (e) {
+        task.warnings.push(`「${task.sectionTitle}」失败：${e.message}`)
+      }
+      await new Promise((r) => setTimeout(r, 400))
+    }
+
+    if (!all.length && task.cancelled) {
+      task.phase = 'cancelled'
+      return
+    }
+    if (!all.length) {
+      throw new Error(task.warnings.length ? '所有章节摘取均失败：' + task.warnings[0] : '未提取出任何卡片')
+    }
+    task.phase = 'done'
+    task.result = {
+      deckName: file.name.replace(/\.(pdf|docx|txt|md)$/i, '') + '-知识点',
+      cards: all,
+      fileName: file.name,
+      warnings: task.warnings,
+      cancelledPartial: task.cancelled,
+    }
   } catch (e) {
     task.phase = 'error'
     task.error = e.message

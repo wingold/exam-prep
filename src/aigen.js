@@ -67,6 +67,34 @@ export async function genQuestionsRaw(content, opts = {}) {
   return arr.filter((q) => q && typeof q.stem === 'string' && q.stem.trim() && Array.isArray(q.answer))
 }
 
+/* 讲义内容 → 知识点卡片的用户提示词 */
+export function genCardsPrompt(content, { chapter = '', count = 8 } = {}) {
+  return [
+    `把下面的讲义内容提取成 ${count} 张可背诵的知识点卡片，输出一个 JSON 数组，不要任何解释文字。`,
+    '要求：',
+    '1. 每张格式：{"front":"要回忆的钩子（概念名/考点/简短问题）","back":"答案要点，1-3 句，适合直接背诵","chapter":"章节名","difficulty":""}',
+    '2. front 要短、可触发回忆；back 是背诵本体，精炼不啰嗦',
+    '3. 高频考点、必背条目标 "difficulty":"重点"，其余留空字符串',
+    '4. 只输出 JSON 数组本身，不要markdown围栏',
+    '',
+    chapter ? `章节标题：${chapter}` : '',
+    '讲义内容：',
+    content.slice(0, 6000),
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+/* 单段内容提取知识卡片（原始数组） */
+export async function genCardsRaw(content, opts = {}) {
+  const text = await chatOnce([
+    { role: 'system', content: '你是考证背诵卡片整理专家，永远只输出合法 JSON。' },
+    { role: 'user', content: genCardsPrompt(content, opts) },
+  ])
+  const arr = extractJsonArray(text)
+  return arr.filter((c) => c && typeof c.front === 'string' && c.front.trim() && typeof c.back === 'string' && c.back.trim())
+}
+
 /* 弱项出卷：薄弱章节 + 近期错题 → 题目数组 */
 export async function genWeakQuestions({ weakChapters = [], wrongStems = [], count = 8 } = {}) {
   const lines = [

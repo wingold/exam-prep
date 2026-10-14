@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import db, { getOrCreateCert, listSubjects, listSessions, subjectProgress } from '../db'
 import { dueCount } from '../srs'
+import { getPlans, planProgress } from '../cardstore'
 
 const router = useRouter()
 const cert = ref(null)
@@ -11,6 +12,9 @@ const sessions = ref([])
 const regs = ref([])
 const wrongCount = ref(0)
 const reviewDue = ref(0)
+const noteDue = ref(0)
+const planDay = ref(null) // { done, target }
+const planWeek = ref(null)
 const progressMap = ref({})
 const todayAttempts = ref(0)
 
@@ -21,6 +25,17 @@ onMounted(async () => {
   regs.value = await db.registrations.toArray()
   wrongCount.value = await db.wrongItems.where('status').equals('active').count()
   reviewDue.value = await dueCount()
+  // 知识卡今日到期（全部组）
+  const decks = await db.decks.toArray()
+  let nd = 0
+  for (const d of decks) nd += await db.noteCards.where('deckId').equals(d.id).and((c) => (c.dueAt || 0) <= new Date().setHours(23, 59, 59, 999)).count()
+  noteDue.value = nd
+  // 复习计划进度
+  try {
+    const plans = await getPlans()
+    planDay.value = await planProgress(plans.day)
+    planWeek.value = await planProgress(plans.week)
+  } catch { /* 计划表未就绪时忽略 */ }
   const dayStart = new Date().setHours(0, 0, 0, 0)
   todayAttempts.value = await db.attempts.where('at').aboveOrEqual(dayStart).count()
   const m = {}
@@ -60,6 +75,9 @@ const weakest = computed(() => {
     .sort((a, b) => (progressMap.value[a.id] || 0) - (progressMap.value[b.id] || 0))
   return started[0] || null
 })
+
+// 总览只聚焦未通过科目；已通过的归档，不再占进度列表
+const activeSubjects = computed(() => subjects.value.filter((s) => s.status !== 'Passed'))
 </script>
 
 <template>
@@ -120,18 +138,23 @@ const weakest = computed(() => {
       <!-- 各科进度 -->
       <div class="card">
         <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 12px">各科复习进度</h3>
-        <div v-if="!subjects.length" class="tiny">先到进度页添加科目</div>
-        <div v-for="s in subjects" :key="s.id" style="margin-bottom: 12px">
+        <div v-if="!activeSubjects.length" class="tiny" style="padding: 8px 0">
+          {{ subjects.length ? '全部科目已通过 🎉 进度页可查看归档成绩' : '先到进度页添加科目' }}
+        </div>
+        <div v-for="s in activeSubjects" :key="s.id" style="margin-bottom: 12px">
           <div class="row between" style="font-size: 13px; margin-bottom: 4px">
-            <span>{{ s.name }}</span>
+            <span>
+              {{ s.name }}
+              <span v-if="s.status === 'Failed'" class="tag red" style="margin-left: 4px">需重考</span>
+            </span>
             <span class="tiny">{{ progressMap[s.id] || 0 }}%</span>
           </div>
           <div class="bar">
-            <i
-              :class="{ green: s.status === 'Passed' }"
-              :style="{ width: (progressMap[s.id] || 0) + '%' }"
-            ></i>
+            <i :class="{ amber: s.status === 'Registered' }" :style="{ width: (progressMap[s.id] || 0) + '%' }"></i>
           </div>
+        </div>
+        <div v-if="passedCount" class="tiny" style="margin-top: 4px">
+          已通过 {{ passedCount }} 科已归档，详见<a href="#/progress" style="color: var(--accent)">进度页</a>
         </div>
       </div>
 
@@ -140,13 +163,27 @@ const weakest = computed(() => {
         <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 12px">今天</h3>
         <div style="font-size: 14px; margin-bottom: 10px">
           已作答 <b>{{ todayAttempts }}</b> 题 · 待复习错题 <b style="color: var(--red)">{{ wrongCount }}</b> 道
-          · 今日记忆卡 <b style="color: var(--accent)">{{ reviewDue }}</b> 张
+          · 题卡待复习 <b style="color: var(--accent)">{{ reviewDue }}</b> 张
+          · 知识卡到期 <b style="color: var(--accent)">{{ noteDue }}</b> 张
+        </div>
+        <!-- 复习计划进度 -->
+        <div v-if="planDay" style="margin-bottom: 10px">
+          <div class="row between" style="font-size: 13px; margin-bottom: 4px">
+            <span>📚 今日背诵 <b>{{ planDay.done }}</b> / {{ planDay.target }} 张</span>
+            <span class="tiny">本周 {{ planWeek?.done ?? 0 }} / {{ planWeek?.target ?? '—' }}</span>
+          </div>
+          <div class="bar">
+            <i :class="{ green: planDay.target && planDay.done >= planDay.target }"
+               :style="{ width: (planDay.target ? Math.min(100, Math.round((planDay.done / planDay.target) * 100)) : 0) + '%' }"></i>
+          </div>
+          <router-link to="/cards" class="tiny" style="color: var(--accent)">调整目标与查看考前盘点 →</router-link>
         </div>
         <div v-if="weakest" class="muted" style="margin-bottom: 14px">
           薄弱科目：{{ weakest.name }}（{{ progressMap[weakest.id] || 0 }}%），建议优先练习
         </div>
         <div class="row wrap">
-          <button class="btn" @click="router.push('/practice?mode=review')">记忆复习（{{ reviewDue }}）</button>
+          <button class="btn" @click="router.push('/practice?mode=review')">题卡复习（{{ reviewDue }}）</button>
+          <button class="btn ghost" @click="router.push('/cards')">背知识卡片</button>
           <button class="btn ghost" @click="router.push('/practice')">开始练习</button>
           <button class="btn ghost" @click="router.push('/wrong')">复习错题</button>
           <button class="btn ghost" @click="router.push('/exam')">模拟考试</button>

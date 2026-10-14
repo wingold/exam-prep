@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import mammoth from 'mammoth/mammoth.browser'
 import * as XLSX from 'xlsx'
 import db, { uid, now, plain, getOrCreateCert, listSubjects } from '../db'
@@ -23,16 +23,24 @@ const needAiCfg = ref(false)
 const pdfTask = computed(() => (aiStore.task && aiStore.task.kind === 'pdf' ? aiStore.task : null))
 
 onMounted(async () => {
-  // 消费后台完成的 PDF 出题结果 → 进入预览
+  consumePdfResult()
+  const cert = await getOrCreateCert()
+  subjects.value = await listSubjects(cert.id)
+  await reload()
+})
+
+// 停在本页等待时，任务完成也要立即进入预览（监听 phase 字符串，对象原地变更不触发引用比较）
+watch(() => pdfTask.value && pdfTask.value.phase, (p) => {
+  if (p === 'done') consumePdfResult()
+})
+
+function consumePdfResult() {
   const t = aiStore.task
   if (t && t.kind === 'pdf' && (t.phase === 'done' || (t.phase === 'cancelled' && t.got)) && t.result && !t.consumed) {
     preview.value = { ...t.result, targetSubjectId: '' }
     t.consumed = true
   }
-  const cert = await getOrCreateCert()
-  subjects.value = await listSubjects(cert.id)
-  await reload()
-})
+}
 
 async function reload() {
   banks.value = await db.banks.orderBy('createdAt').reverse().toArray()
@@ -190,7 +198,7 @@ function cancelPdf() {
     </div>
 
     <!-- PDF 出题进度（本页内联；离开页面后右下角进度球继续显示） -->
-    <div v-if="pdfTask" class="card" style="margin-bottom: 16px; border-color: var(--accent)">
+    <div v-if="pdfTask && (pdfTask.phase === 'extracting' || pdfTask.phase === 'generating')" class="card" style="margin-bottom: 16px; border-color: var(--accent)">
       <div class="row between" style="margin-bottom: 8px">
         <b>{{ pdfTask.phase === 'extracting' ? '正在提取 PDF 文本…' : `AI 出题中：${pdfTask.idx} / ${pdfTask.total} 段` }}</b>
         <button v-if="pdfTask.phase === 'generating' || pdfTask.phase === 'extracting'" class="btn ghost sm" @click="cancelPdf">取消</button>

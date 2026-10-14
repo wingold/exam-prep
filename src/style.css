@@ -109,6 +109,9 @@ h1, h2, h3, h4, p { margin: 0; }
 }
 
 .bottomnav { display: none; }
+/* 更多菜单：桌面默认隐藏；必须写在 @media 之前，否则同权重的 display:none 会盖住媒体查询里的样式 */
+.more-mask,
+.more-panel { display: none; }
 
 @media (max-width: 768px) {
   .side { display: none; }
@@ -188,9 +191,6 @@ h1, h2, h3, h4, p { margin: 0; }
     color: var(--accent);
   }
 }
-
-.more-mask,
-.more-panel { display: none; }
 
 /* ===== 通用元件 ===== */
 

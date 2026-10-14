@@ -11,6 +11,7 @@ const FILE = 'exam-prep-sync.json'
 const TABLES = [
   'certificates', 'subjects', 'sessions', 'registrations', 'scores',
   'banks', 'questions', 'attempts', 'papers', 'results', 'wrongItems', 'cards',
+  'decks', 'noteCards', 'plans',
 ]
 
 export function getWebdavConfig() {

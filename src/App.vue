@@ -1,13 +1,27 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Capacitor } from '@capacitor/core'
 import { StatusBar, Style } from '@capacitor/status-bar'
 import { syncReady, runSync } from './sync'
 import FloatingBall from './components/FloatingBall.vue'
 
+const route = useRoute()
+const router = useRouter()
+
 const footText = ref('本地存储 · 数据自持')
+const moreOpen = ref(false)
 let timer = null
 let firstTimer = null
+
+/* 底部导航：4 个主入口 + 更多（防止拥挤）；桌面侧栏仍显示全部 */
+const PRIMARY = ['/', '/practice', '/cards', '/wrong']
+const primaryRoutes = computed(() =>
+  PRIMARY.map((p) => router.options.routes.find((r) => r.path === p)).filter(Boolean)
+)
+const moreRoutes = computed(() => router.options.routes.filter((r) => !PRIMARY.includes(r.path)))
+
+watch(() => route.path, () => { moreOpen.value = false })
 
 async function autoSync() {
   if (!syncReady()) return
@@ -63,9 +77,12 @@ onUnmounted(() => {
       <router-view />
     </main>
 
+    <!-- 更多菜单遮罩（仅手机端可见） -->
+    <div v-if="moreOpen" class="more-mask" @click="moreOpen = false"></div>
+
     <nav class="bottomnav">
       <router-link
-        v-for="r in $router.options.routes.filter((x) => x.path !== '/settings')"
+        v-for="r in primaryRoutes"
         :key="r.path"
         :to="r.path"
         :class="{ on: $route.path === r.path }"
@@ -73,7 +90,23 @@ onUnmounted(() => {
         <span class="ico">{{ r.meta.ico }}</span>
         {{ r.meta.title }}
       </router-link>
+      <a
+        class="more-btn"
+        :class="{ on: moreOpen || moreRoutes.some((r) => r.path === $route.path) }"
+        @click="moreOpen = !moreOpen"
+      >
+        <span class="ico">☰</span>
+        更多
+      </a>
     </nav>
+
+    <!-- 更多菜单面板 -->
+    <div v-if="moreOpen" class="more-panel">
+      <router-link v-for="r in moreRoutes" :key="r.path" :to="r.path" class="more-item">
+        <span class="ico">{{ r.meta.ico }}</span>
+        {{ r.meta.title }}
+      </router-link>
+    </div>
 
     <!-- AI 后台任务悬浮进度球（全站可见） -->
     <FloatingBall />

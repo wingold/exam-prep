@@ -1,5 +1,22 @@
 apply plugin: 'com.android.application'
 
+import groovy.json.JsonSlurper
+
+// 版本号唯一来源：根目录 package.json
+// versionCode = major*10000 + minor*100 + patch（1.7.0 -> 10700）
+def appVersion = new JsonSlurper().parse(rootProject.file('../package.json')).version
+def (vMajor, vMinor, vPatch) = appVersion.tokenize('.').collect { it as int }
+def computedVersionCode = vMajor * 10000 + vMinor * 100 + vPatch
+
+// 本机签名配置：keystore.properties 不入库。
+// 缺失时回退为不指定签名（assembleRelease 仍可产出未签名包，他人克隆后可自行构建调试包）
+def keystorePropsFile = rootProject.file('keystore.properties')
+def hasReleaseKeystore = keystorePropsFile.exists()
+def keystoreProps = new Properties()
+if (hasReleaseKeystore) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
 android {
     namespace = "com.examprep.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +24,8 @@ android {
         applicationId "com.examprep.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode computedVersionCode
+        versionName appVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +33,23 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            release {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

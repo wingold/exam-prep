@@ -6,6 +6,8 @@ import { getAIConfig, setAIConfig } from '../ai'
 import { getWebdavConfig, setWebdavConfig, runSync, validateDavUrl, testConnection } from '../sync'
 
 const isNative = Capacitor.isNativePlatform()
+// 由 vite define 注入，取自 package.json（与 Android versionName 同源）
+const appVersion = __APP_VERSION__
 
 const file = ref(null)
 const msg = ref('')
@@ -28,6 +30,17 @@ const proxyShown = computed(() => {
   const custom = (wd.value.proxy || '').trim()
   return custom || (import.meta.env.DEV ? '/dav-sync（开发服务器内置代理，自动生效）' : '未配置')
 })
+
+async function copyVersion() {
+  const text = `考证刷题 v${appVersion} · ${isNative ? 'Android APK' : '网页版'} · ${navigator.userAgent}`
+  try {
+    await navigator.clipboard.writeText(text)
+    msg.value = '版本信息已复制'
+  } catch {
+    msg.value = text
+  }
+  setTimeout(() => { msg.value = '' }, 2500)
+}
 
 onMounted(async () => {
   const d = await exportAll()
@@ -241,8 +254,9 @@ async function doImport(ev, mode) {
 
     <div class="card">
       <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 6px">关于</h3>
-      <p class="muted">考证刷题助手 v0.2 · 本地存储，无账号无埋点</p>
+      <p class="muted">考证刷题助手 v{{ appVersion }} · 本地存储，无账号无埋点</p>
       <p class="tiny" style="margin-top: 6px">支持：题库导入 / 多模式练习 / 模考 / 错题本 / 题卡复习 / 知识卡片 / 成绩统计 / AI 讲题 / WebDAV 同步</p>
+      <button class="btn ghost sm" style="margin-top: 10px" @click="copyVersion">复制版本信息</button>
     </div>
   </div>
 </template>

@@ -3,6 +3,10 @@ import vue from '@vitejs/plugin-vue'
 import fs from 'node:fs'
 import path from 'node:path'
 
+/* 版本号唯一来源：package.json。Android 的 versionName / versionCode 也读它，
+   避免出现「APK 已发到 v1.6.1、build.gradle 还写 1.0」这种漂移。 */
+const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8'))
+
 /* WebDAV 同源代理：坚果云等网盘不返回 CORS 头，浏览器直连必失败。
    dev 模式下把 /dav-sync?u=<目标URL> 转发到目标（服务端发起，无跨域限制）。
    注意：必须手工跟随重定向并保留 Authorization —— undici fetch 在跨域重定向时
@@ -83,5 +87,8 @@ function webdavProxy() {
 export default defineConfig({
   plugins: [vue(), webdavProxy()],
   base: './',
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   server: { host: true, port: 5174 },
 })

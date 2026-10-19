@@ -9,6 +9,7 @@ import {
   studyList, rateNoteCard, parseCardJson, parseCardSheet, parseCardText,
   deckChapters, getPlans, savePlan, planProgress, examReadiness,
 } from '../cardstore'
+import { previewIntervals, intervalLabel, refreshExamCap } from '../srs'
 
 const view = ref('list') // list | preview | study | plan
 const decks = ref([])
@@ -32,8 +33,12 @@ const schedDelay = ref(3)
 const cardsTask = computed(() => (aiStore.task && aiStore.task.kind === 'cards' ? aiStore.task : null))
 const cur = computed(() => (session.value ? session.value.list[session.value.idx] : null))
 
+/* 当前卡片三档评分分别推到多久 */
+const nextPreview = computed(() => (cur.value ? previewIntervals(cur.value) : null))
+
 onMounted(async () => {
   await reload()
+  await refreshExamCap()
   const cert = await getOrCreateCert()
   subjects.value = await listSubjects(cert.id)
   consumeAiResult()
@@ -306,9 +311,18 @@ const pctOf = (done, target) => Math.min(100, target ? Math.round((done / target
       </div>
 
       <div v-if="session.flipped" class="row" style="gap: 10px; margin-top: 16px">
-        <button class="btn danger" style="flex: 1" @click="rate('again')">不认识</button>
-        <button class="btn ghost" style="flex: 1; border-color: var(--amber); color: var(--amber)" @click="rate('hard')">模糊</button>
-        <button class="btn" style="flex: 1; background: var(--green)" @click="rate('good')">认识</button>
+        <button class="btn danger" style="flex: 1; flex-direction: column; gap: 1px; padding: 8px 10px" @click="rate('again')">
+          不认识
+          <span style="font-size: 11px; font-weight: 400; opacity: 0.9">{{ intervalLabel(nextPreview.again) }}</span>
+        </button>
+        <button class="btn ghost" style="flex: 1; flex-direction: column; gap: 1px; padding: 8px 10px; border-color: var(--amber); color: var(--amber)" @click="rate('hard')">
+          模糊
+          <span style="font-size: 11px; font-weight: 400; opacity: 0.9">{{ intervalLabel(nextPreview.hard) }}</span>
+        </button>
+        <button class="btn" style="flex: 1; flex-direction: column; gap: 1px; padding: 8px 10px; background: var(--green)" @click="rate('good')">
+          认识
+          <span style="font-size: 11px; font-weight: 400; opacity: 0.9">{{ intervalLabel(nextPreview.good) }}</span>
+        </button>
       </div>
       <div class="tiny" style="margin-top: 10px; text-align: center">键盘：空格翻面 · 1 不认识 · 2 模糊 · 3 认识</div>
     </template>

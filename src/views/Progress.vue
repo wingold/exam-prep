@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import db, { uid, now, getOrCreateCert, listSubjects, listSessions, subjectProgress } from '../db'
+import { refreshExamCap } from '../srs'
 
 const cert = ref(null)
 const subjects = ref([])
@@ -99,6 +100,7 @@ async function saveSession() {
   }
   showSession.value = false
   await reload()
+  await refreshExamCap() // 考试日变了，间隔上限要跟着变
 }
 
 async function delSession(s) {
@@ -106,6 +108,7 @@ async function delSession(s) {
   await db.sessions.delete(s.id)
   await db.registrations.where('sessionId').equals(s.id).delete()
   await reload()
+  await refreshExamCap()
 }
 
 /* ---- 报考：给某考期勾选科目 ---- */

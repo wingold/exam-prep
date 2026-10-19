@@ -136,7 +136,7 @@ async function finish() {
       } else {
         await db.wrongItems.put({ id: uid(), questionId: q.id, wrongReasons: [], wrongCount: 1, rightStreak: 0, status: 'active', updatedAt: now() })
       }
-      await enrollCard(q.id)
+      await enrollCard(q.id, { lapsed: true })
     }
   }
   const total = e.questions.length

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Capacitor } from '@capacitor/core'
 import { StatusBar, Style } from '@capacitor/status-bar'
 import { syncReady, runSync } from './sync'
+import { refreshExamCap } from './srs'
 import FloatingBall from './components/FloatingBall.vue'
 
 const route = useRoute()
@@ -28,6 +29,8 @@ async function autoSync() {
   try {
     footText.value = '同步中…'
     const action = await runSync()
+    // 同步可能带来新的考期，刷新间隔封顶
+    await refreshExamCap()
     const t = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
     footText.value = action === '已是最新' ? `已同步 ${t}` : `已同步 ${t} · ${action}`
   } catch (e) {
@@ -45,6 +48,8 @@ onMounted(async () => {
       await StatusBar.setStyle({ style: Style.Light })
     } catch { /* 个别机型失败时退回 CSS 安全区兜底 */ }
   }
+  // 间隔封顶要用到最近考期，启动时先读一次
+  try { await refreshExamCap() } catch { /* 无考期表也不影响使用 */ }
   // 启动 2.5 秒后自动静默同步（等首屏可交互），之后每 30 分钟一次
   firstTimer = setTimeout(autoSync, 2500)
   timer = setInterval(autoSync, 30 * 60 * 1000)

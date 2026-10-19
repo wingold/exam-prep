@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion } from '../importers'
-import { dueCards, enrollCard, rateCard, dueCount } from '../srs'
+import { dueCards, enrollCard, rateCard, dueCount, previewIntervals, intervalLabel, refreshExamCap } from '../srs'
 import AiTutor from '../components/AiTutor.vue'
 
 const route = useRoute()
@@ -21,6 +21,8 @@ const cardCount = ref(0)
 const wrongTotal = ref(0)
 const enrolledNow = ref({}) // qid -> true（本题已手动加入）
 const keyCount = ref(0)
+const nextDueText = ref('') // 今天没有到期卡时，显示最近一张的到期日
+const examDays = ref(null) // 距最近考试天数；null = 没有未来考期
 
 // 会话状态
 const session = ref(null) // { questions, idx, answers: {qid: [..]}, revealed }
@@ -38,6 +40,8 @@ const result = computed(() => {
 onMounted(async () => {
   banks.value = await db.banks.orderBy('createdAt').reverse().toArray()
   due.value = await dueCount()
+  await refreshNextDue()
+  examDays.value = await refreshExamCap()
   cardCount.value = await db.cards.count()
   wrongTotal.value = await db.wrongItems.where('status').equals('active').count()
   if (route.query.bank && banks.value.some((b) => b.id === route.query.bank)) {
@@ -70,6 +74,7 @@ async function start() {
     }
     session.value = {
       questions: dueList.map((d) => d.q),
+      cards: Object.fromEntries(dueList.map((d) => [d.q.id, d.card])),
       review: true,
       idx: 0,
       answers: {},
@@ -149,7 +154,7 @@ async function recordAttempt() {
   })
   if (!ok) {
     await addWrong(q.id, [])
-    await enrollCard(q.id)
+    await enrollCard(q.id, { lapsed: true })
   }
 }
 
@@ -193,10 +198,23 @@ function next() {
   }
 }
 
+/* 今天没有到期卡时，查最近一张的到期日，避免"0 张"让人以为功能失效 */
+async function refreshNextDue() {
+  if (due.value) {
+    nextDueText.value = ''
+    return
+  }
+  const c = await db.cards.orderBy('dueAt').first()
+  nextDueText.value = c
+    ? new Date(c.dueAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+    : ''
+}
+
 /* 记忆复习评分：不认识 / 模糊 / 认识 */
 async function rate(r) {
   await rateCard(cur.value.id, r)
   due.value = await dueCount()
+  await refreshNextDue()
   next()
 }
 
@@ -205,6 +223,7 @@ async function enrollCurrent() {
   await enrollCard(cur.value.id)
   enrolledNow.value = { ...enrolledNow.value, [cur.value.id]: true }
   due.value = await dueCount()
+  await refreshNextDue()
   cardCount.value = await db.cards.count()
 }
 
@@ -213,6 +232,7 @@ async function enrollAllWrongs() {
   const wrongs = await db.wrongItems.where('status').equals('active').toArray()
   for (const w of wrongs) await enrollCard(w.questionId)
   due.value = await dueCount()
+  await refreshNextDue()
   cardCount.value = await db.cards.count()
   alert(`已把 ${wrongs.length} 道错题加入题卡复习，明天起按间隔到期`)
 }
@@ -225,6 +245,12 @@ function quit() {
 }
 
 const isRight = computed(() => cur.value ? isCorrect(cur.value, curChosen.value) : false)
+
+/* 当前卡三档评分分别推到多久：直接显示在按钮上 */
+const nextPreview = computed(() => {
+  if (!session.value?.review || !cur.value) return null
+  return previewIntervals(session.value.cards?.[cur.value.id])
+})
 
 function optionState(letter) {
   if (!session.value?.revealed) {
@@ -294,8 +320,11 @@ const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章
             <br />
             <span style="color: var(--ink-3)">背知识点请走「卡片」页的<b>知识卡片</b>（从讲义摘取的记忆点），两套互不相通。</span>
           </div>
+          <div v-if="examDays != null" class="tiny" style="margin-top: 6px; color: var(--accent)">
+            距最近考试 {{ examDays }} 天 · 单卡间隔上限 {{ Math.max(1, Math.floor(examDays / 3)) }} 天（保证考前还能复习到）
+          </div>
           <div v-if="!due && cardCount" class="tiny" style="margin-top: 6px">
-            今天没有到期的题卡，最近一张将于未来几天到期——间隔复习本来就不该天天有。
+            今天没有到期的题卡<template v-if="nextDueText">，最近一批 <b>{{ nextDueText }}</b> 到期</template>——间隔复习本来就不该天天有。
           </div>
           <div v-if="!cardCount" class="tiny" style="margin-top: 6px">
             还没有题卡，先去练几题（答错自动入队），或用上面的按钮从错题本导入。
@@ -427,11 +456,20 @@ const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章
         提交答案
       </button>
 
-      <!-- 记忆复习：评分三键 -->
+      <!-- 记忆复习：评分三键（按钮上直接显示下次复习时间） -->
       <div v-else-if="session.review" style="display: flex; gap: 10px">
-        <button class="btn danger" style="flex: 1" @click="rate('again')">不认识</button>
-        <button class="btn ghost" style="flex: 1; border-color: var(--amber); color: var(--amber)" @click="rate('hard')">模糊</button>
-        <button class="btn" style="flex: 1; background: var(--green)" @click="rate('good')">认识</button>
+        <button class="btn danger" style="flex: 1; flex-direction: column; gap: 1px; padding: 8px 10px" @click="rate('again')">
+          不认识
+          <span style="font-size: 11px; font-weight: 400; opacity: 0.9">{{ intervalLabel(nextPreview.again) }}</span>
+        </button>
+        <button class="btn ghost" style="flex: 1; flex-direction: column; gap: 1px; padding: 8px 10px; border-color: var(--amber); color: var(--amber)" @click="rate('hard')">
+          模糊
+          <span style="font-size: 11px; font-weight: 400; opacity: 0.9">{{ intervalLabel(nextPreview.hard) }}</span>
+        </button>
+        <button class="btn" style="flex: 1; flex-direction: column; gap: 1px; padding: 8px 10px; background: var(--green)" @click="rate('good')">
+          认识
+          <span style="font-size: 11px; font-weight: 400; opacity: 0.9">{{ intervalLabel(nextPreview.good) }}</span>
+        </button>
       </div>
 
       <button v-else class="btn block" @click="next">

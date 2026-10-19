@@ -102,7 +102,7 @@ async function submitRedo() {
     await rateCard(q.id, 'good')
   } else {
     await db.wrongItems.update(item.w.id, { rightStreak: 0, wrongCount: (item.w.wrongCount || 1) + 1, updatedAt: now() })
-    await enrollCard(q.id)
+    await enrollCard(q.id, { lapsed: true })
   }
 }
 

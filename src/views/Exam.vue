@@ -5,6 +5,7 @@ import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion } from '../importers'
 import { enrollCard } from '../srs'
 import { scheduleSync } from '../sync'
+import Icon from '../components/Icon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -389,7 +390,7 @@ onUnmounted(() => {
           class="tag"
           :class="remain < 300 ? 'red' : 'accent'"
           style="font-size: 16px; font-weight: 700; padding: 4px 14px"
-        >⏱ {{ fmt(remain) }}</span>
+        ><Icon name="clock" :size="16" style="vertical-align: -2px" /> {{ fmt(remain) }}</span>
       </div>
 
       <div class="bar" style="margin-bottom: 16px">
@@ -497,7 +498,7 @@ onUnmounted(() => {
       </div>
 
       <div v-if="!banks.length" class="card empty">
-        <div class="big">⏱</div>
+        <div class="ico-wrap"><Icon name="timer" :size="28" /></div>
         <p>先导入题库</p>
         <router-link to="/banks"><button class="btn">去导入</button></router-link>
       </div>

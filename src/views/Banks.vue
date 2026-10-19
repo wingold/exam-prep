@@ -7,6 +7,7 @@ import { parseJson, parseText, parseSheetRows } from '../importers'
 import { aiReady } from '../ai'
 import { aiStore, startPdfTask } from '../aistore'
 import { saveTextFile } from '../savefile'
+import Icon from '../components/Icon.vue'
 import ExportNotice from '../components/ExportNotice.vue'
 
 const banks = ref([])
@@ -297,7 +298,7 @@ function cancelPdf() {
 
     <!-- 题库列表 -->
     <div v-if="!banks.length && !preview" class="card empty">
-      <div class="big">▤</div>
+      <div class="ico-wrap"><Icon name="layers" :size="28" /></div>
       <p>还没有题库。点击右上角「导入题库」开始<br />支持格式见 PRD：Excel 表头需含 题干/选项A/答案；文本格式见示例</p>
       <button class="btn" @click="fileInput.click()">导入题库</button>
     </div>

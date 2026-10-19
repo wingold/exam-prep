@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import db, { uid, now, getOrCreateCert, listSubjects, listSessions, subjectProgress } from '../db'
 import { refreshExamCap } from '../srs'
+import Icon from '../components/Icon.vue'
 
 const cert = ref(null)
 const subjects = ref([])
@@ -278,7 +279,7 @@ const statusText = (st) =>
       <!-- 桌面：已通过归档 -->
       <div v-if="passedSubjects.length" class="desk-only" style="margin-top: 14px">
         <button class="btn ghost sm" @click="showArchived = !showArchived">
-          {{ showArchived ? '▾' : '▸' }} 已通过归档（{{ passedSubjects.length }} 科）
+          <Icon :name="showArchived ? 'chevronDown' : 'chevronRight'" :size="14" style="vertical-align: -2px" /> 已通过归档（{{ passedSubjects.length }} 科）
         </button>
         <table v-if="showArchived" class="tbl" style="margin-top: 10px; opacity: 0.85">
           <tbody>
@@ -336,7 +337,7 @@ const statusText = (st) =>
         <!-- 手机：已通过归档 -->
         <div v-if="passedSubjects.length" style="margin-top: 6px">
           <button class="btn ghost sm" @click="showArchived = !showArchived">
-            {{ showArchived ? '▾' : '▸' }} 已通过归档（{{ passedSubjects.length }} 科）
+            <Icon :name="showArchived ? 'chevronDown' : 'chevronRight'" :size="14" style="vertical-align: -2px" /> 已通过归档（{{ passedSubjects.length }} 科）
           </button>
           <template v-if="showArchived">
             <div v-for="s in passedSubjects" :key="s.id" class="card" style="padding: 12px 14px; margin-top: 10px; box-shadow: none; opacity: 0.85">

@@ -6,6 +6,7 @@ import { isCorrect, isKeyQuestion } from '../importers'
 import { dueCards, enrollCard, rateCard, dueCount, previewIntervals, intervalLabel, refreshExamCap } from '../srs'
 import { scheduleSync } from '../sync'
 import { getPrefs } from '../prefs'
+import Icon from '../components/Icon.vue'
 import AiTutor from '../components/AiTutor.vue'
 
 const route = useRoute()
@@ -282,7 +283,7 @@ const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章
       </div>
 
       <div v-if="!banks.length" class="card empty">
-        <div class="big">✎</div>
+        <div class="ico-wrap"><Icon name="pencil" :size="28" /></div>
         <p>先导入题库才能开始练习</p>
         <router-link to="/banks"><button class="btn">去导入题库</button></router-link>
       </div>

@@ -2,9 +2,13 @@ import { createApp } from 'vue'
 import { Capacitor } from '@capacitor/core'
 import App from './App.vue'
 import router from './router'
+import { installPressFeedback } from './ui'
 import './style.css'
 
 createApp(App).use(router).mount('#app')
+
+/* 全站按下反馈（水波 + 缩放 + 轻震动），一次安装，所有按钮生效 */
+installPressFeedback()
 
 /* 网页版注册 Service Worker 以获得离线能力。
    - APK 内不注册：Capacitor 的资源本来就在本地，多一层缓存只会在升级后

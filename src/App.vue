@@ -6,6 +6,7 @@ import { StatusBar, Style } from '@capacitor/status-bar'
 import { syncReady, runSync, getSyncStatus, SYNC_STALE_DAYS, flushScheduledSync } from './sync'
 import { refreshExamCap } from './srs'
 import FloatingBall from './components/FloatingBall.vue'
+import Icon from './components/Icon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -127,7 +128,7 @@ onUnmounted(() => {
         class="nav"
         :class="{ on: $route.path === r.path }"
       >
-        <span>{{ r.meta.ico }}</span> {{ r.meta.title }}
+        <Icon :name="r.meta.icon" :size="18" /> {{ r.meta.title }}
       </router-link>
       <div class="spacer"></div>
       <div class="foot" :class="{ warn: syncWarn }">
@@ -136,11 +137,12 @@ onUnmounted(() => {
     </aside>
 
     <main class="main">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <Transition name="page" mode="out-in">
+          <component :is="Component" />
+        </Transition>
+      </router-view>
     </main>
-
-    <!-- 更多菜单遮罩（仅手机端可见） -->
-    <div v-if="moreOpen" class="more-mask" @click="moreOpen = false"></div>
 
     <nav class="bottomnav">
       <router-link
@@ -149,7 +151,7 @@ onUnmounted(() => {
         :to="r.path"
         :class="{ on: $route.path === r.path }"
       >
-        <span class="ico">{{ r.meta.ico }}</span>
+        <Icon :name="r.meta.icon" :size="21" />
         {{ r.meta.title }}
       </router-link>
       <a
@@ -157,23 +159,28 @@ onUnmounted(() => {
         :class="{ on: moreOpen || moreRoutes.some((r) => r.path === $route.path) }"
         @click="moreOpen = !moreOpen"
       >
-        <span class="ico">☰</span>
+        <Icon name="grid" :size="21" />
         更多
       </a>
     </nav>
 
-    <!-- 更多菜单面板 -->
-    <div v-if="moreOpen" class="more-panel">
-      <router-link v-for="r in moreRoutes" :key="r.path" :to="r.path" class="more-item">
-        <span class="ico">{{ r.meta.ico }}</span>
-        {{ r.meta.title }}
-      </router-link>
-      <!-- 手机端侧栏不可见，同步状态在这里补一次，点进去就是设置页 -->
-      <router-link v-if="syncLine" to="/settings" class="more-item more-sync" :class="{ warn: syncWarn }">
-        <span class="ico">⇅</span>
-        {{ syncLine }}
-      </router-link>
-    </div>
+    <!-- 更多菜单：遮罩与面板包一层，才能整体做升起动画 -->
+    <Transition name="sheet">
+      <div v-if="moreOpen" class="more-shell">
+        <div class="more-mask" @click="moreOpen = false"></div>
+        <div class="more-panel">
+          <router-link v-for="r in moreRoutes" :key="r.path" :to="r.path" class="more-item">
+            <Icon :name="r.meta.icon" :size="20" />
+            {{ r.meta.title }}
+          </router-link>
+          <!-- 手机端侧栏不可见，同步状态在这里补一次，点进去就是设置页 -->
+          <router-link v-if="syncLine" to="/settings" class="more-item more-sync" :class="{ warn: syncWarn }">
+            <Icon name="sync" :size="15" />
+            {{ syncLine }}
+          </router-link>
+        </div>
+      </div>
+    </Transition>
 
     <!-- AI 后台任务悬浮进度球（全站可见） -->
     <FloatingBall />

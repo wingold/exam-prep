@@ -9,6 +9,9 @@ const DEFAULTS = {
      关掉后：答错只进错题本，不再自动排期；已存在的卡片不受影响，
      仍可在练习页手动「加入题卡复习」，也可继续用复习模式。 */
   autoEnroll: true,
+  /* 按下按钮时轻震动一下。安卓 WebView 需要 VIBRATE 权限（已加），
+     iOS / 桌面浏览器没有这个能力，调用会被静默忽略。 */
+  haptic: true,
 }
 
 export function getPrefs() {

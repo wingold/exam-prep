@@ -7,6 +7,7 @@ import { getWebdavConfig, setWebdavConfig, runSync, validateDavUrl, testConnecti
 import { saveTextFile } from '../savefile'
 import { getPrefs, setPrefs } from '../prefs'
 import ExportNotice from '../components/ExportNotice.vue'
+import Icon from '../components/Icon.vue'
 
 const isNative = Capacitor.isNativePlatform()
 // 由 vite define 注入，取自 package.json（与 Android versionName 同源）
@@ -28,10 +29,16 @@ const testing = ref(false)
 const testMsg = ref('')
 const testOk = ref(null)
 const autoEnroll = ref(getPrefs().autoEnroll)
+const haptic = ref(getPrefs().haptic)
 
 function toggleAutoEnroll() {
   const next = setPrefs({ autoEnroll: !autoEnroll.value })
   autoEnroll.value = next.autoEnroll
+}
+
+function toggleHaptic() {
+  const next = setPrefs({ haptic: !haptic.value })
+  haptic.value = next.haptic
 }
 
 const urlHint = computed(() => validateDavUrl(wd.value.url))
@@ -229,6 +236,24 @@ async function doImport(ev, mode) {
     </div>
 
     <div class="card" style="margin-bottom: 16px">
+      <div class="row between wrap" style="gap: 12px; align-items: flex-start">
+        <div style="min-width: 0; flex: 1">
+          <div style="font-size: 14px; font-weight: 600">按下轻震动</div>
+          <div class="tiny" style="margin-top: 4px; line-height: 1.7">
+            点击按钮时给一次很短的触感反馈。安卓手机有效；网页版和 iOS 受系统限制，可能没有反应。
+          </div>
+        </div>
+        <button
+          class="sw"
+          :class="{ on: haptic }"
+          role="switch"
+          :aria-checked="haptic"
+          @click="toggleHaptic"
+        ><i></i></button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 16px">
       <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 6px">导出备份</h3>
       <p class="muted" style="margin-bottom: 12px">
         导出为 JSON 文件，可在任意设备导入恢复。
@@ -330,7 +355,9 @@ async function doImport(ev, mode) {
         <span class="lab">模型名</span>
         <input class="input" v-model="ai.model" placeholder="deepseek-chat" />
       </label>
-      <button class="btn" @click="saveAI">{{ aiSaved ? '已保存 ✓' : '保存配置' }}</button>
+      <button class="btn" @click="saveAI">
+        <Icon v-if="aiSaved" name="check" :size="16" />{{ aiSaved ? '已保存' : '保存配置' }}
+      </button>
     </div>
 
     <div class="card">

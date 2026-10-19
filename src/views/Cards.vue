@@ -10,6 +10,7 @@ import {
   deckChapters, getPlans, savePlan, planProgress, examReadiness,
 } from '../cardstore'
 import { previewIntervals, intervalLabel, refreshExamCap } from '../srs'
+import Icon from '../components/Icon.vue'
 
 const view = ref('list') // list | preview | study | plan
 const decks = ref([])
@@ -556,7 +557,7 @@ const pctOf = (done, target) => Math.min(100, target ? Math.round((done / target
       </div>
 
       <div v-if="!decks.length && !cardsTask && !preview" class="card empty">
-        <div class="big">❑</div>
+        <div class="ico-wrap"><Icon name="cards" :size="28" /></div>
         <p>还没有卡片组。用「AI 从讲义摘取」把 PDF/Word 变成背诵卡，<br />或「+ 导入卡片」用 JSON/Excel/TXT 直接导入</p>
       </div>
 

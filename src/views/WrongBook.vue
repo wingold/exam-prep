@@ -4,6 +4,7 @@ import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion } from '../importers'
 import { enrollCard, rateCard, reconcileWrongBook, isMasteredCard, masteredHint, MASTERED_DAYS, MASTERED_REPS } from '../srs'
 import { scheduleSync } from '../sync'
+import Icon from '../components/Icon.vue'
 import AiTutor from '../components/AiTutor.vue'
 
 const items = ref([]) // [{wrongItem, question}]
@@ -260,7 +261,7 @@ function quitRedo() {
       </div>
 
       <div v-if="!shown.length" class="card empty">
-        <div class="big">✓</div>
+        <div class="ico-wrap" style="color: var(--green)"><Icon name="check" :size="30" /></div>
         <p>{{ filter === 'active' ? '没有待复习的错题' : '还没有已掌握的错题' }}</p>
       </div>
 

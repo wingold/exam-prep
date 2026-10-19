@@ -10,7 +10,9 @@
   --ink-2: #5b6472;
   --ink-3: #9aa3b2;
   --line: #e6e8ee;
+  --line-2: #f0f2f6;
   --accent: #4f46e5;
+  --accent-2: #6d6af8;
   --accent-weak: #eef0fe;
   --green: #16a34a;
   --green-weak: #e9f7ef;
@@ -21,6 +23,10 @@
   --radius: 10px;
   --radius-lg: 16px;
   --shadow: 0 1px 2px rgba(27, 31, 42, 0.05), 0 4px 16px rgba(27, 31, 42, 0.04);
+  --shadow-press: 0 1px 2px rgba(27, 31, 42, 0.12) inset;
+  /* 按压手感：位移小、时间短，才像「按到了实体键」而不是动画表演 */
+  --ease: cubic-bezier(0.32, 0.72, 0.24, 1);
+  --press: scale(0.965);
   --font: -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
 }
 
@@ -35,6 +41,8 @@ html, body {
   font-size: 15px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  /* 安卓/iOS 点按时的蓝色高亮块会盖住我们自己的反馈，一律关掉 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 #app { min-height: 100dvh; }
@@ -45,11 +53,63 @@ button, input, select, textarea {
   color: inherit;
 }
 
+/* 所有可点元素：去掉双击缩放造成的 300ms 延迟，并禁掉长按选中文字 */
+button, a, .tap, [data-press] {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 button { cursor: pointer; }
+
+button:disabled, .btn:disabled, .btn[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+/* 键盘导航要有明确焦点环；鼠标点按不显示，避免视觉噪音 */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection { background: rgba(79, 70, 229, 0.16); }
 
 a { color: var(--accent); text-decoration: none; }
 
 h1, h2, h3, h4, p { margin: 0; }
+
+/* ===== 按下反馈（水波）=====
+   .press-host 由 ui.js 在首次按下时加上，负责裁剪水波；
+   元素本身不用写 position:relative。 */
+.press-host {
+  position: relative;
+  overflow: hidden;
+}
+
+.press-ink {
+  position: absolute;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.22;
+  transform: scale(0);
+  pointer-events: none;
+  animation: press-ink 0.46s var(--ease) forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes press-ink {
+  0% { transform: scale(0); opacity: 0.26; }
+  60% { opacity: 0.14; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+/* 按下时整体轻微缩一下：即使水波被系统降级，手感也还在 */
+.is-pressing {
+  transform: var(--press);
+  transition: transform 0.1s var(--ease);
+}
 
 /* ===== 布局：桌面侧栏 + 移动底栏 ===== */
 
@@ -79,19 +139,38 @@ h1, h2, h3, h4, p { margin: 0; }
 .side .logo span { color: var(--accent); }
 
 .side a.nav {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
-  border-radius: 8px;
+  border-radius: 9px;
   color: var(--ink-2);
   font-size: 14px;
   font-weight: 500;
+  transition: background 0.16s var(--ease), color 0.16s var(--ease);
 }
 
-.side a.nav:hover { background: var(--bg); color: var(--ink); }
+.side a.nav .icon { color: var(--ink-3); transition: color 0.16s var(--ease); }
 
-.side a.nav.on { background: var(--accent-weak); color: var(--accent); }
+.side a.nav:hover { background: var(--bg); color: var(--ink); }
+.side a.nav:hover .icon { color: var(--ink-2); }
+
+.side a.nav.on { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+.side a.nav.on .icon { color: var(--accent); }
+
+/* 选中项左侧的短竖条：侧栏里「我在哪」靠它一眼定位 */
+.side a.nav.on::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
 
 .side .spacer { flex: 1; }
 
@@ -135,18 +214,38 @@ h1, h2, h3, h4, p { margin: 0; }
     z-index: 50;
   }
   .bottomnav a {
+    position: relative;
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
+    gap: 3px;
     font-size: 11px;
     color: var(--ink-3);
-    padding: 4px 0;
-    border-radius: 8px;
+    padding: 6px 0 4px;
+    border-radius: 10px;
+    transition: color 0.16s var(--ease);
   }
-  .bottomnav a .ico { font-size: 19px; line-height: 1; }
+  .bottomnav a .icon {
+    transition: transform 0.2s var(--ease), color 0.16s var(--ease);
+  }
+  /* 手指按下去时必须立刻有反应：图标缩一下 + 整格压暗 */
+  .bottomnav a.is-pressing { background: var(--line-2); }
+  .bottomnav a.is-pressing .icon { transform: scale(0.86); }
   .bottomnav a.on { color: var(--accent); font-weight: 600; }
+  /* 选中项顶部的短横条，比单纯变色更容易扫到 */
+  .bottomnav a.on::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 50%;
+    width: 22px;
+    height: 3px;
+    border-radius: 0 0 3px 3px;
+    background: var(--accent);
+    transform: translateX(-50%);
+  }
   .bottomnav a.more-btn {
     text-decoration: none;
     cursor: pointer;
@@ -181,14 +280,14 @@ h1, h2, h3, h4, p { margin: 0; }
     align-items: center;
     gap: 4px;
     padding: 10px 4px;
-    border-radius: 10px;
+    border-radius: 12px;
     color: var(--ink-2);
     font-size: 12px;
     font-weight: 600;
     text-decoration: none;
+    transition: background 0.14s var(--ease), color 0.14s var(--ease);
   }
-  .more-item .ico { font-size: 18px; }
-  .more-item:active,
+  .more-item.is-pressing { background: var(--line-2); }
   .more-item.router-link-exact-active {
     background: var(--accent-weak);
     color: var(--accent);
@@ -206,9 +305,31 @@ h1, h2, h3, h4, p { margin: 0; }
     font-weight: 500;
     color: var(--ink-3);
   }
-  .more-item.more-sync .ico { font-size: 14px; }
   .more-item.more-sync.warn { color: var(--amber); }
 }
+
+/* 更多面板：从底栏上方升起，遮罩淡入 —— 空间关系比直接闪现清楚 */
+.sheet-enter-active .more-panel,
+.sheet-leave-active .more-panel {
+  transition: transform 0.22s var(--ease), opacity 0.18s var(--ease);
+}
+.sheet-enter-from .more-panel,
+.sheet-leave-to .more-panel {
+  transform: translateY(14px) scale(0.98);
+  opacity: 0;
+}
+.sheet-enter-active .more-mask,
+.sheet-leave-active .more-mask {
+  transition: opacity 0.2s var(--ease);
+}
+.sheet-enter-from .more-mask,
+.sheet-leave-to .more-mask { opacity: 0; }
+
+/* 页面切换：只做很轻的位移淡入，重了会显得迟钝 */
+.page-enter-active { transition: opacity 0.19s var(--ease), transform 0.19s var(--ease); }
+.page-leave-active { transition: opacity 0.1s var(--ease); }
+.page-enter-from { opacity: 0; transform: translateY(6px); }
+.page-leave-to { opacity: 0; }
 
 /* ===== 通用元件 ===== */
 
@@ -231,6 +352,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .page-head .sub { color: var(--ink-2); font-size: 13px; margin-top: 4px; }
 
 .btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -238,30 +360,79 @@ h1, h2, h3, h4, p { margin: 0; }
   background: var(--accent);
   color: #fff;
   border: none;
-  border-radius: 8px;
-  padding: 8px 16px;
+  border-radius: 9px;
+  padding: 9px 16px;
   font-size: 14px;
   font-weight: 600;
-  transition: filter 0.15s;
+  line-height: 1.35;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(79, 70, 229, 0.22), 0 4px 12px rgba(79, 70, 229, 0.13);
+  transition: transform 0.12s var(--ease), background 0.16s var(--ease),
+    box-shadow 0.16s var(--ease), filter 0.16s var(--ease);
 }
 
-.btn:hover { filter: brightness(1.08); }
+/* 悬停微微抬起，按下立刻缩回并压掉投影 —— 一组动作构成「按下去」的实体感 */
+.btn:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 2px 4px rgba(79, 70, 229, 0.24), 0 8px 20px rgba(79, 70, 229, 0.18);
+}
 
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:active,
+.btn.is-pressing {
+  transform: scale(0.962) translateY(0.5px);
+  box-shadow: 0 0 0 rgba(79, 70, 229, 0), inset 0 1px 3px rgba(28, 20, 70, 0.28);
+  filter: brightness(0.97);
+  transition-duration: 0.06s;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
 
 .btn.ghost {
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(27, 31, 42, 0.04);
 }
 
 .btn.ghost:hover { background: var(--bg); filter: none; }
+.btn.ghost:active,
+.btn.ghost.is-pressing {
+  background: var(--line-2);
+  box-shadow: inset 0 1px 3px rgba(27, 31, 42, 0.1);
+}
 
-.btn.danger { background: var(--red); }
+.btn.danger { background: var(--red); box-shadow: 0 1px 2px rgba(220, 38, 38, 0.22), 0 4px 12px rgba(220, 38, 38, 0.13); }
 
-.btn.sm { padding: 5px 12px; font-size: 13px; border-radius: 7px; }
+.btn.sm { padding: 6px 12px; font-size: 13px; border-radius: 8px; }
 
 .btn.block { width: 100%; }
+
+/* 纯图标按钮：正方形热区，避免小图标难以命中 */
+.icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-2);
+  overflow: hidden;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease), transform 0.1s var(--ease);
+}
+.icon-btn:hover { background: var(--bg); color: var(--ink); }
+.icon-btn:active,
+.icon-btn.is-pressing { background: var(--line); transform: scale(0.92); }
+.icon-btn.danger:hover { background: var(--red-weak); color: var(--red); }
 
 .tag {
   display: inline-block;
@@ -318,11 +489,24 @@ label.field .lab {
 
 .empty {
   text-align: center;
-  padding: 48px 20px;
+  padding: 44px 20px;
   color: var(--ink-2);
 }
 
-.empty .big { font-size: 40px; margin-bottom: 8px; }
+/* 空状态：一个圆角底衬托的线性图标，比 40px 的字符符号清楚得多 */
+.empty .ico-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 62px;
+  height: 62px;
+  margin-bottom: 12px;
+  border-radius: 20px;
+  background: linear-gradient(160deg, #f7f8fb, #eef0f6);
+  color: var(--ink-3);
+  box-shadow: inset 0 1px 0 #fff;
+}
+
 .empty p { font-size: 14px; margin-bottom: 16px; }
 
 /* 桌面/移动双布局：desk-only 在手机隐藏，mob-only 在桌面隐藏 */
@@ -353,6 +537,7 @@ table.desk-only { display: table; }
   justify-content: center;
   z-index: 100;
   padding: 16px;
+  animation: mask-in 0.18s var(--ease);
 }
 
 .modal {
@@ -363,6 +548,13 @@ table.desk-only { display: table; }
   max-width: 460px;
   max-height: 88dvh;
   overflow-y: auto;
+  box-shadow: 0 24px 60px rgba(20, 22, 45, 0.24);
+  animation: modal-in 0.22s var(--ease);
+}
+
+@keyframes mask-in { from { opacity: 0; } }
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
 }
 
 .modal h3 { font-size: 17px; font-weight: 700; margin-bottom: 16px; }
@@ -379,6 +571,8 @@ table.tbl th {
 }
 table.tbl td { padding: 10px; border-bottom: 1px solid var(--line); }
 table.tbl tr:last-child td { border-bottom: none; }
+table.tbl tbody tr { transition: background 0.14s var(--ease); }
+table.tbl tbody tr:hover td { background: #fafbfd; }
 
 /* 进度条 */
 .bar {
@@ -458,7 +652,8 @@ table.tbl tr:last-child td { border-bottom: none; }
   background: var(--line);
   cursor: pointer;
   padding: 0;
-  transition: background 0.2s ease;
+  overflow: hidden;
+  transition: background 0.22s var(--ease), transform 0.1s var(--ease);
 }
 .sw > i {
   position: absolute;
@@ -469,7 +664,20 @@ table.tbl tr:last-child td { border-bottom: none; }
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
-  transition: transform 0.2s ease;
+  transition: transform 0.22s var(--ease);
 }
 .sw.on { background: var(--accent); }
 .sw.on > i { transform: translateX(20px); }
+.sw:active,
+.sw.is-pressing { transform: scale(0.94); }
+
+/* 系统开了「减少动态效果」就只保留颜色反馈，不做位移和缩放 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .is-pressing { transform: none; }
+  .press-ink { display: none; }
+}

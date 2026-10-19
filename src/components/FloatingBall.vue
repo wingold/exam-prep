@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { aiStore, cancelTask, dismissTask } from '../aistore'
+import Icon from './Icon.vue'
 
 const router = useRouter()
 const pos = ref({ x: 0, y: 0 })
@@ -193,7 +194,14 @@ onMounted(() => {
       @pointerup="onUp"
     >
       <span class="ball-inner" :class="{ pulse: task.phase === 'generating' || task.phase === 'extracting' }">
-        {{ ballLabel }}
+        <Icon
+          v-if="task.phase === 'done' || (task.phase === 'cancelled' && task.got)"
+          name="check"
+          :size="22"
+          :stroke="2.4"
+        />
+        <Icon v-else-if="task.phase === 'error'" name="alert" :size="20" :stroke="2.2" />
+        <template v-else>{{ ballLabel }}</template>
       </span>
     </button>
   </div>
@@ -221,6 +229,9 @@ onMounted(() => {
 
 .ball:active { cursor: grabbing; }
 .ball:hover { transform: scale(1.06); }
+/* 拖拽/按下都要有明确的体积变化，否则手指压在球上没有任何回应 */
+.ball.is-pressing,
+.ball:active { transform: scale(0.93); transition-duration: 0.08s; }
 
 .ball-inner {
   display: flex;

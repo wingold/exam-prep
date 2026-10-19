@@ -27,3 +27,6 @@ release/
 
 # 本地协作记忆
 .workbuddy/
+
+# 图标渲染中间产物（源文件在 scripts/icon-render.html，可再生）
+.icon-tmp/

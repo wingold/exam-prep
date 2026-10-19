@@ -5,6 +5,7 @@ import { exportAll, importAll } from '../db'
 import { getAIConfig, setAIConfig } from '../ai'
 import { getWebdavConfig, setWebdavConfig, runSync, validateDavUrl, testConnection, getSyncStatus } from '../sync'
 import { saveTextFile } from '../savefile'
+import { getPrefs, setPrefs } from '../prefs'
 import ExportNotice from '../components/ExportNotice.vue'
 
 const isNative = Capacitor.isNativePlatform()
@@ -26,6 +27,12 @@ const syncErr = ref('')
 const testing = ref(false)
 const testMsg = ref('')
 const testOk = ref(null)
+const autoEnroll = ref(getPrefs().autoEnroll)
+
+function toggleAutoEnroll() {
+  const next = setPrefs({ autoEnroll: !autoEnroll.value })
+  autoEnroll.value = next.autoEnroll
+}
 
 const urlHint = computed(() => validateDavUrl(wd.value.url))
 
@@ -198,6 +205,27 @@ async function doImport(ev, mode) {
         <div><div class="tiny">作答记录</div><div style="font-size: 22px; font-weight: 700">{{ stats.attempts }}</div></div>
         <div><div class="tiny">错题</div><div style="font-size: 22px; font-weight: 700">{{ stats.wrong }}</div></div>
       </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 16px">
+      <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 10px">记忆复习</h3>
+      <div class="row between wrap" style="gap: 12px; align-items: flex-start">
+        <div style="min-width: 0; flex: 1">
+          <div style="font-size: 14px; font-weight: 600">答错自动加入题卡复习</div>
+          <div class="tiny" style="margin-top: 4px; line-height: 1.7">
+            开启后，练习与模考答错的题会在<b>次日</b>进入记忆队列，按间隔重复提醒。
+            关闭后只进错题本；已有卡片不受影响，练习页仍可手动「加入题卡复习」。
+          </div>
+        </div>
+        <button
+          class="sw"
+          :class="{ on: autoEnroll }"
+          role="switch"
+          :aria-checked="autoEnroll"
+          @click="toggleAutoEnroll"
+        ><i></i></button>
+      </div>
+      <div class="tiny" style="margin-top: 8px; color: var(--ink-3)">此项只存本机，不参与 WebDAV 同步与备份导入。</div>
     </div>
 
     <div class="card" style="margin-bottom: 16px">

@@ -2,7 +2,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import db, { getOrCreateCert, listSubjects, listSessions, subjectProgress } from '../db'
-import { dueCount, reconcileWrongBook } from '../srs'
+import { dueCount, dueForecast, reconcileWrongBook } from '../srs'
+import { getPrefs } from '../prefs'
 import { getPlans, planProgress } from '../cardstore'
 
 const router = useRouter()
@@ -17,6 +18,8 @@ const planDay = ref(null) // { done, target }
 const planWeek = ref(null)
 const progressMap = ref({})
 const todayAttempts = ref(0)
+const forecast = ref([])
+const autoEnroll = ref(true)
 
 onMounted(async () => {
   cert.value = await getOrCreateCert()
@@ -27,6 +30,8 @@ onMounted(async () => {
   await reconcileWrongBook()
   wrongCount.value = await db.wrongItems.where('status').equals('active').count()
   reviewDue.value = await dueCount()
+  forecast.value = await dueForecast(7)
+  autoEnroll.value = getPrefs().autoEnroll
   // 知识卡今日到期（全部组）
   const decks = await db.decks.toArray()
   let nd = 0
@@ -77,6 +82,10 @@ const weakest = computed(() => {
     .sort((a, b) => (progressMap.value[a.id] || 0) - (progressMap.value[b.id] || 0))
   return started[0] || null
 })
+
+/* 负载图的柱子高度按 7 天内的最大值归一，最大值为 0 时全部给 0 高度 */
+const forecastMax = computed(() => Math.max(1, ...forecast.value.map((d) => d.count)))
+const forecastTotal = computed(() => forecast.value.reduce((s, d) => s + d.count, 0))
 
 // 总览只聚焦未通过科目；已通过的归档，不再占进度列表
 const activeSubjects = computed(() => subjects.value.filter((s) => s.status !== 'Passed'))
@@ -190,6 +199,30 @@ const activeSubjects = computed(() => subjects.value.filter((s) => s.status !== 
           <button class="btn ghost" @click="router.push('/wrong')">复习错题</button>
           <button class="btn ghost" @click="router.push('/exam')">模拟考试</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 未来 7 天复习负载：把排期画出来，避免只剩一个黑箱数字 -->
+    <div class="card" style="margin-bottom: 16px">
+      <div class="row between wrap" style="margin-bottom: 12px; gap: 8px">
+        <h3 style="font-size: 15px; font-weight: 700">未来 7 天复习负载</h3>
+        <span class="tiny">
+          <template v-if="forecastTotal">共 {{ forecastTotal }} 张 · 逾期并入今天</template>
+          <template v-else>暂无排期中的题卡</template>
+        </span>
+      </div>
+      <div class="load-chart">
+        <div v-for="(d, i) in forecast" :key="d.at" class="load-col" :class="{ today: i === 0 }">
+          <div class="load-num" :class="{ zero: !d.count }">{{ d.count }}</div>
+          <div class="load-track">
+            <i :style="{ height: (d.count ? Math.max(6, Math.round((d.count / forecastMax) * 100)) : 0) + '%' }"></i>
+          </div>
+          <div class="load-label">{{ d.label }}</div>
+        </div>
+      </div>
+      <div v-if="!autoEnroll" class="tiny" style="margin-top: 10px; color: var(--amber)">
+        已在设置页关闭「答错自动加入题卡复习」，新错题不会再自动排期。
+        <router-link to="/settings" style="color: var(--accent)">去设置</router-link>
       </div>
     </div>
 

@@ -8,10 +8,14 @@ const dir = path.dirname(fileURLToPath(import.meta.url))
 const srcPath = path.join(dir, '../src/srs.js')
 const tmp = path.join(dir, '.srs-pure.tmp.mjs')
 
-const code = fs.readFileSync(srcPath, 'utf8').replace(
-  /^import db, \{ uid, now \} from '\.\/db'\s*$/m,
-  'const db = {}\nconst uid = () => ""\nconst now = () => Date.now()'
-)
+const code = fs
+  .readFileSync(srcPath, 'utf8')
+  .replace(
+    /^import db, \{ uid, now \} from '\.\/db'\s*$/m,
+    'const db = {}\nconst uid = () => ""\nconst now = () => Date.now()'
+  )
+  // 本机偏好（设置页开关）在测试里固定为「开启自动入队」
+  .replace(/^import \{ getPrefs \} from '\.\/prefs'\s*$/m, 'const getPrefs = () => ({ autoEnroll: true })')
 fs.writeFileSync(tmp, code)
 
 const { nextSchedule, previewIntervals, intervalLabel, capInterval, isMasteredCard, MASTERED_DAYS, MASTERED_REPS } = await import(pathToFileURL(tmp).href)

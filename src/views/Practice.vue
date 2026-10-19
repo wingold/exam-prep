@@ -5,6 +5,7 @@ import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion } from '../importers'
 import { dueCards, enrollCard, rateCard, dueCount, previewIntervals, intervalLabel, refreshExamCap } from '../srs'
 import { scheduleSync } from '../sync'
+import { getPrefs } from '../prefs'
 import AiTutor from '../components/AiTutor.vue'
 
 const route = useRoute()
@@ -24,6 +25,7 @@ const enrolledNow = ref({}) // qid -> true（本题已手动加入）
 const keyCount = ref(0)
 const nextDueText = ref('') // 今天没有到期卡时，显示最近一张的到期日
 const examDays = ref(null) // 距最近考试天数；null = 没有未来考期
+const autoEnroll = ref(getPrefs().autoEnroll)
 
 // 会话状态
 const session = ref(null) // { questions, idx, answers: {qid: [..]}, revealed }
@@ -222,9 +224,9 @@ async function rate(r) {
   next()
 }
 
-/* 手动把当前题加入记忆卡 */
+/* 手动把当前题加入记忆卡：force 绕过设置页的自动入队开关 */
 async function enrollCurrent() {
-  await enrollCard(cur.value.id)
+  await enrollCard(cur.value.id, { force: true })
   enrolledNow.value = { ...enrolledNow.value, [cur.value.id]: true }
   due.value = await dueCount()
   await refreshNextDue()
@@ -234,7 +236,7 @@ async function enrollCurrent() {
 /* 把错题本里的活跃错题批量加入记忆卡 */
 async function enrollAllWrongs() {
   const wrongs = await db.wrongItems.where('status').equals('active').toArray()
-  for (const w of wrongs) await enrollCard(w.questionId)
+  for (const w of wrongs) await enrollCard(w.questionId, { force: true })
   due.value = await dueCount()
   await refreshNextDue()
   cardCount.value = await db.cards.count()
@@ -315,7 +317,8 @@ const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章
         <div v-if="mode === 'review'" class="card" style="padding: 12px 14px; background: var(--accent-weak); border-color: transparent; margin-bottom: 8px">
           <div class="tiny" style="line-height: 1.7; color: var(--ink-2)">
             <b style="color: var(--accent)">题卡（复习的是题目，不是知识点卡片）：</b><br />
-            ① 练习/模考答错的题<b>自动入队</b>，今天答错明天就会到期；<br />
+            ① <template v-if="autoEnroll">练习/模考答错的题<b>自动入队</b>，今天答错明天就会到期；</template>
+            <template v-else><span style="color: var(--amber)">设置页已关闭自动入队</span>，答错只进错题本；</template><br />
             ② 答题后点<b>「加入题卡复习」</b>可手动把任意题加入；<br />
             ③ 一键把错题本全部转成题卡：
             <button class="btn ghost sm" style="margin-left: 6px" :disabled="!wrongTotal" @click="enrollAllWrongs">
@@ -331,7 +334,7 @@ const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章
             今天没有到期的题卡<template v-if="nextDueText">，最近一批 <b>{{ nextDueText }}</b> 到期</template>——间隔复习本来就不该天天有。
           </div>
           <div v-if="!cardCount" class="tiny" style="margin-top: 6px">
-            还没有题卡，先去练几题（答错自动入队），或用上面的按钮从错题本导入。
+            还没有题卡，先去练几题<template v-if="autoEnroll">（答错自动入队）</template>，或用上面的按钮从错题本导入。
           </div>
         </div>
 

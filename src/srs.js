@@ -3,6 +3,7 @@
    错题自动入队（次日生效），评分后按间隔滚入未来 */
 
 import db, { uid, now } from './db'
+import { getPrefs } from './prefs'
 
 const DAY = 86400e3
 
@@ -63,8 +64,10 @@ export async function refreshExamCap() {
 /* 错题自动入队：
    - 第一次入队：次日到期，不占用今天的复习时间
    - 已在队列中且是"又答错了"：按「不认识」重新排期（明天再见、易度下调），
-     而不是把零间隔拉回今天——那等于把错题本又刷一遍 */
-export async function enrollCard(questionId, { lapsed = false } = {}) {
+     而不是把零间隔拉回今天——那等于把错题本又刷一遍
+   - force=true 用于用户手动「加入题卡复习」：不受设置页总开关限制 */
+export async function enrollCard(questionId, { lapsed = false, force = false } = {}) {
+  if (!force && !getPrefs().autoEnroll) return
   const existing = await db.cards.get(questionId)
   if (existing) {
     if (lapsed) {
@@ -205,4 +208,26 @@ export async function dueCards() {
 
 export async function dueCount() {
   return db.cards.where('dueAt').belowOrEqual(endOfToday()).count()
+}
+
+/* 未来 N 天每天到期的卡片数（逾期的并入今天）
+   首页负载图用：只给一个「待复习 N」的数字看不出排期是否在工作，
+   把 7 天的分布画出来，黑箱才变成可判断的东西。 */
+export async function dueForecast(days = 7) {
+  const cards = await db.cards.toArray()
+  const today = startOfToday()
+  const buckets = Array.from({ length: days }, (_, i) => {
+    const d = new Date(today + i * DAY)
+    const label = i === 0 ? '今天' : i === 1 ? '明天' : `${d.getMonth() + 1}/${d.getDate()}`
+    return { at: today + i * DAY, label, count: 0 }
+  })
+  for (const c of cards) {
+    const due = c.dueAt || 0
+    if (!Number.isFinite(due) || !due) continue
+    let idx = Math.floor((due - today) / DAY)
+    if (idx < 0) idx = 0 // 逾期未复习的并入今天
+    if (idx >= days) continue // 更远的落在图外
+    buckets[idx].count++
+  }
+  return buckets
 }

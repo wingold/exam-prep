@@ -55,9 +55,12 @@
 ### 同步与数据
 - **本地优先**：全部数据存 IndexedDB；设置页一键导出/导入 JSON 备份
 - **WebDAV 双端同步**（坚果云等）：记录级"谁新用谁"合并，不互相覆盖
-  - 打开应用自动静默同步（2.5 秒后），之后每 30 分钟一次；也可手动「立即同步」
+  - 打开应用 2.5 秒后自动同步；作答后延迟 20 秒合并触发（交卷后 10 秒）；前台每 30 分钟一次；也可手动「立即同步」
+  - **失败不再静默**：侧栏页脚 / 手机「更多」面板 / 设置页都显示「已同步 13:20」或「同步失败 · 见设置」，超过 3 天没成功会变色提醒
   - 内置「测试连接」（目录检测 + 写探针，精确定位 401/404/409）
   - Web 端自动走同源代理；**APK 走原生网络直连，无需任何代理**
+
+> 换手机 / 卸载重装前，务必先到设置页点一次「立即同步」并看到成功提示——云端只保存「上次成功同步那一刻」的快照，之后新增的记录还在本机。
 
 ### 界面
 - 桌面侧栏 + 手机底栏导航；手机端进度台账为卡片布局，宽表格卡内横滑
@@ -138,10 +141,15 @@ npm run dev        # http://localhost:5174
 ```bash
 npm run build
 npx cap sync android
+npm run check:assets           # 必做：确认 dist 真的同步进了 Android 工程
 cd android
 ./gradlew assembleDebug        # Windows: gradlew.bat assembleDebug
 # 产物：android/app/build/outputs/apk/debug/app-debug.apk
 ```
+
+> `cap sync` 偶发失败（文件被 Gradle 或杀毒软件占用），而随后的 `gradlew` **仍然是 BUILD SUCCESSFUL**——只是打进包里的还是上一版界面。`npm run check:assets` 就是用来卡这一步的。
+
+**自检**：`npm test` 会跑两个脚本——`verify-srs.mjs`（排期与掌握判定，19 项）和 `verify-bank-roundtrip.mjs`（题库导出回导字段一致性）。
 
 **版本号**：唯一来源是 `package.json` 的 `version`。Android 侧自动派生 `versionName`（如 `1.7.0`）与 `versionCode`（`major*10000 + minor*100 + patch`，如 `10700`），界面「关于」里的版本也取自同一处——不要再手改 `build.gradle`。
 

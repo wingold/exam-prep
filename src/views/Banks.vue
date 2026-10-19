@@ -6,6 +6,8 @@ import db, { uid, now, plain, getOrCreateCert, listSubjects, exportBank } from '
 import { parseJson, parseText, parseSheetRows } from '../importers'
 import { aiReady } from '../ai'
 import { aiStore, startPdfTask } from '../aistore'
+import { saveTextFile } from '../savefile'
+import ExportNotice from '../components/ExportNotice.vue'
 
 const banks = ref([])
 const subjects = ref([])
@@ -14,6 +16,8 @@ const bankSubject = ref({}) // bankId -> subjectId map（题库列表用）
 const importing = ref(false)
 const importMsg = ref('')
 const importErr = ref('')
+const exporting = ref('') // 正在导出的题库 id，防重复点击
+const exportInfo = ref(null) // { filename, kb, path, where, shared, cancel, count, name }
 const preview = ref(null) // { bankName, questions, fileName, targetSubjectId }
 const fileInput = ref(null)
 const pdfInput = ref(null)
@@ -122,27 +126,34 @@ async function assignSubject(b, ev) {
   await db.banks.update(b.id, { subjectId: ev.target.value || null })
 }
 
-/* 单题库导出：格式与导入一致，导出的文件可直接再导入 */
+/* 单题库导出：格式与导入一致，导出的文件可直接再导入。
+   手机上不能用 <a download>（Android WebView 静默无效），统一交给 savefile.js 走原生。 */
 async function exportBankFile(b) {
   importMsg.value = ''
   importErr.value = ''
+  if (exporting.value) return
+  exporting.value = b.id
   try {
     const data = await exportBank(b.id)
     if (!data.questions.length) throw new Error('该题库没有题目可导出')
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${safeFileName(b.name)}.json`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-    importMsg.value = `已导出「${b.name}」共 ${data.questions.length} 题`
+    const filename = `${safeFileName(b.name)}.json`
+    const r = await saveTextFile(filename, JSON.stringify(data, null, 2))
+    exportInfo.value = { ...r, count: data.questions.length, name: b.name }
+    if (r.where === 'browser') {
+      importMsg.value = `已导出「${b.name}」共 ${data.questions.length} 题（${r.kb} KB），请到浏览器的下载目录查看`
+    } else if (r.shared) {
+      importMsg.value = `已导出「${b.name}」共 ${data.questions.length} 题（${r.kb} KB），已交给系统分享面板`
+    } else {
+      importMsg.value = `已生成「${b.name}」共 ${data.questions.length} 题（${r.kb} KB），但分享面板被关掉了——文件还没存到手机上`
+    }
   } catch (e) {
-    importErr.value = '导出失败：' + e.message
+    importErr.value = '导出失败：' + (e.message || e)
+  } finally {
+    exporting.value = ''
   }
 }
+
+/* 第一次误关分享面板时，不用重新导出一遍（由 ExportNotice 组件内部处理） */
 
 function safeFileName(s) {
   return String(s || '题库').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60)
@@ -241,6 +252,9 @@ function cancelPdf() {
     <p v-if="importMsg" class="card" style="padding: 10px 16px; color: var(--green); margin-bottom: 12px">{{ importMsg }}</p>
     <p v-if="importErr" class="card" style="padding: 10px 16px; color: var(--red); margin-bottom: 12px">{{ importErr }}</p>
 
+    <!-- 导出落点说明：手机上 <a download> 无效，必须让用户看到文件到底在哪、有没有真存下来 -->
+    <ExportNotice :info="exportInfo" />
+
     <!-- 导入预览 -->
     <div v-if="preview" class="card" style="margin-bottom: 16px; border-color: var(--accent)">
       <div class="row between wrap" style="margin-bottom: 10px">
@@ -293,7 +307,9 @@ function cancelPdf() {
         <div class="row between" style="margin-bottom: 6px">
           <b>{{ b.name }}</b>
           <div class="row" style="gap: 4px">
-            <button class="btn ghost sm" @click="exportBankFile(b)">导出</button>
+            <button class="btn ghost sm" :disabled="!!exporting" @click="exportBankFile(b)">
+              {{ exporting === b.id ? '导出中…' : '导出' }}
+            </button>
             <button class="btn ghost sm" @click="delBank(b)">删</button>
           </div>
         </div>

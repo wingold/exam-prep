@@ -4,6 +4,8 @@ import { Capacitor } from '@capacitor/core'
 import { exportAll, importAll } from '../db'
 import { getAIConfig, setAIConfig } from '../ai'
 import { getWebdavConfig, setWebdavConfig, runSync, validateDavUrl, testConnection, getSyncStatus } from '../sync'
+import { saveTextFile } from '../savefile'
+import ExportNotice from '../components/ExportNotice.vue'
 
 const isNative = Capacitor.isNativePlatform()
 // 由 vite define 注入，取自 package.json（与 Android versionName 同源）
@@ -18,6 +20,8 @@ const aiSaved = ref(false)
 const wd = ref({ url: '', user: '', pass: '', proxy: '' })
 const syncing = ref(false)
 const syncMsg = ref('')
+const exporting = ref(false)
+const exportInfo = ref(null)
 const syncErr = ref('')
 const testing = ref(false)
 const testMsg = ref('')
@@ -132,13 +136,30 @@ function fillJgyRoot() {
 }
 
 async function doExport() {
-  const d = await exportAll()
-  const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `exam-prep-backup-${new Date().toISOString().slice(0, 10)}.json`
-  a.click()
-  URL.revokeObjectURL(a.href)
+  err.value = ''
+  msg.value = ''
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const d = await exportAll()
+    const filename = `exam-prep-backup-${new Date().toISOString().slice(0, 10)}.json`
+    const r = await saveTextFile(filename, JSON.stringify(d, null, 2))
+    exportInfo.value = {
+      ...r,
+      summary: `${d.banks.length} 题库 / ${d.questions.length} 题 / ${(d.attempts || []).length} 作答 / ${(d.wrongItems || []).length} 错题`,
+    }
+    if (r.where === 'browser') {
+      msg.value = `已导出备份（${r.kb} KB），请到浏览器的下载目录查看`
+    } else if (r.shared) {
+      msg.value = `已导出备份（${r.kb} KB），已交给系统分享面板`
+    } else {
+      msg.value = `已生成备份（${r.kb} KB），但分享面板被关掉了——文件还没存到手机上`
+    }
+  } catch (e) {
+    err.value = '导出失败：' + (e.message || e)
+  } finally {
+    exporting.value = false
+  }
 }
 
 async function doImport(ev, mode) {
@@ -165,6 +186,10 @@ async function doImport(ev, mode) {
       <div class="sub">数据全部存在本机浏览器中，请定期导出备份</div>
     </div>
 
+    <!-- 导出 / 导入的结果统一提到顶部，避免滚到卡片下面才看到 -->
+    <p v-if="msg" class="card" style="padding: 10px 16px; color: var(--green); margin-bottom: 12px">{{ msg }}</p>
+    <p v-if="err" class="card" style="padding: 10px 16px; color: var(--red); margin-bottom: 12px">{{ err }}</p>
+
     <div class="card" style="margin-bottom: 16px">
       <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 12px">当前数据</h3>
       <div class="grid4" v-if="stats">
@@ -177,9 +202,14 @@ async function doImport(ev, mode) {
 
     <div class="card" style="margin-bottom: 16px">
       <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 6px">导出备份</h3>
-      <p class="muted" style="margin-bottom: 12px">导出为 JSON 文件，可在任意设备导入恢复。</p>
-      <button class="btn" @click="doExport">导出全部数据</button>
+      <p class="muted" style="margin-bottom: 12px">
+        导出为 JSON 文件，可在任意设备导入恢复。
+        <template v-if="isNative">手机上会弹出系统分享面板，在那里选「保存到文件」即可存进手机的下载目录。</template>
+      </p>
+      <button class="btn" :disabled="exporting" @click="doExport">{{ exporting ? '导出中…' : '导出全部数据' }}</button>
     </div>
+
+    <ExportNotice :info="exportInfo" />
 
     <div class="card" style="margin-bottom: 16px">
       <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 6px">导入备份</h3>
@@ -193,8 +223,6 @@ async function doImport(ev, mode) {
         <button class="btn ghost sm" @click="$refs.rep.click()">覆盖导入…</button>
         <input ref="rep" type="file" accept=".json" style="display: none" @change="doImport($event, 'replace')" />
       </div>
-      <p v-if="msg" style="color: var(--green); font-size: 13px; margin-top: 10px">{{ msg }}</p>
-      <p v-if="err" style="color: var(--red); font-size: 13px; margin-top: 10px">{{ err }}</p>
     </div>
 
     <div class="card" style="margin-bottom: 16px">

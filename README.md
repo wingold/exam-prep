@@ -26,12 +26,14 @@
 
 ### 错题本
 - 答错自动收录；**错因归类**，可按错因筛选并开启**专项练习**
-- 重做连续答对 2 次自动移出；错因分布统计
+- **是否掌握由记忆排期判定**（连对 4 次或间隔满 21 天自动移出），也可手动标记掌握 / 重新纳入；错因分布统计
 
 ### 复习记忆（间隔重复）
-- 答错自动入记忆队列；也可手动加卡 / 一键把错题本全部入队
-- 「不认识 / 模糊 / 认识」三键评分，按简化 SM-2 算法安排下次复习时间
-- 首页与练习页显示今日到期卡片数
+- 答错自动入记忆队列，**次日 0 点才到期**（当天做错的题当天不再重考，不和错题本重复）
+- 也可手动加卡 / 一键把错题本全部入队（手动加卡不打乱已有排期，也不扣易度）
+- 「不认识 / 模糊 / 认识」三键评分，按钮上直接显示**下次几天后**；简化 SM-2 调度
+- **考试日封顶**：单卡间隔不超过「距最近考期天数 ÷ 3」，保证考前每张卡还能见 2–3 次
+- 首页与练习页显示今日到期卡片数；没有到期卡时显示最近一批的到期日
 
 ### 统计
 - 近 14 天正确率趋势
@@ -131,7 +133,7 @@ npm run dev        # http://localhost:5174
 
 ### 构建 APK
 
-要求：Node 20+、Android SDK（含 platform 36 与 build-tools 36）、**JDK 21**（不要用 JDK 17 编译不过，JDK 25 会触发 Gradle Groovy 兼容问题）。
+要求：Node 20+、Android SDK（含 platform 36 与 build-tools 36）、**JDK 21**（JDK 17 编译不过，JDK 25 会触发 Gradle Groovy 兼容问题）。
 
 ```bash
 npm run build
@@ -140,6 +142,27 @@ cd android
 ./gradlew assembleDebug        # Windows: gradlew.bat assembleDebug
 # 产物：android/app/build/outputs/apk/debug/app-debug.apk
 ```
+
+**版本号**：唯一来源是 `package.json` 的 `version`。Android 侧自动派生 `versionName`（如 `1.7.0`）与 `versionCode`（`major*10000 + minor*100 + patch`，如 `10700`），界面「关于」里的版本也取自同一处——不要再手改 `build.gradle`。
+
+**签名出包（release）**：
+
+```bash
+cd android
+./gradlew assembleRelease
+# 产物：android/app/build/outputs/apk/release/app-release.apk
+```
+
+签名配置读 `android/keystore.properties`（**不入库**），格式：
+
+```properties
+storeFile=C:/path/to/your-release.jks
+storePassword=******
+keyAlias=your-alias
+keyPassword=******
+```
+
+没有该文件时 `assembleRelease` 仍能构建，但产物未签名，无法覆盖安装已发布的版本。密钥一旦公开使用就**不可更换**（更换后旧版本无法覆盖升级，用户本地数据会随卸载丢失），务必备份到项目目录之外。
 
 ---
 

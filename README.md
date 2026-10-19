@@ -81,6 +81,7 @@
 **网页版**
 
 - 在线版：<https://wingold.github.io/exam-prep/>（GitHub Pages，每次推送 `main` 自动构建）
+  - 仓库首次部署需在 Settings → Pages → Build and deployment → Source 选择 **GitHub Actions**（只需一次；之后由 `.github/workflows/pages.yml` 自动部署）
 - 首次联网打开一次后，Service Worker 会缓存应用外壳与静态资源，之后断网也能进首页、刷题、看统计（AI 讲题与同步仍需网络）
 - 桌面 Chrome / Edge 地址栏右侧会出现「安装」，手机浏览器菜单里可选「添加到主屏幕」，装完就是独立窗口，不再有地址栏
 

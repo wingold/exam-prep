@@ -10,6 +10,27 @@ const regs = ref([])
 const scores = ref([])
 const progressMap = ref({})
 
+/* 证书档案：名称与报考机构可编辑，不再固定「我的证书」 */
+const showCert = ref(false)
+const certForm = ref({ name: '', org: '' })
+
+function editCert() {
+  certForm.value = { name: cert.value?.name || '', org: cert.value?.org || '' }
+  showCert.value = true
+}
+
+async function saveCert() {
+  const name = certForm.value.name.trim()
+  if (!name) return
+  await db.certificates.update(cert.value.id, {
+    name,
+    org: certForm.value.org.trim(),
+    updatedAt: now(),
+  })
+  showCert.value = false
+  await reload()
+}
+
 // 弹窗
 const showSubj = ref(false)
 const subjForm = ref({ id: '', name: '', passScore: 60 })
@@ -200,8 +221,12 @@ const statusText = (st) =>
     <div class="page-head row between">
       <div>
         <h1>考证进度</h1>
-        <div class="sub">{{ cert?.name }} · 共 {{ subjects.length }} 科，已过 {{ passedCount }} 科</div>
+        <div class="sub">
+          {{ cert?.name }}<template v-if="cert?.org">（{{ cert.org }}）</template>
+          · 共 {{ subjects.length }} 科，已过 {{ passedCount }} 科
+        </div>
       </div>
+      <button class="btn ghost sm" @click="editCert">编辑证书</button>
     </div>
 
     <!-- 科目台账 -->
@@ -367,6 +392,28 @@ const statusText = (st) =>
     </div>
 
     <!-- 科目弹窗 -->
+    <!-- 证书档案弹窗 -->
+    <div v-if="showCert" class="modal-mask" @click.self="showCert = false">
+      <div class="modal">
+        <h3>证书档案</h3>
+        <label class="field">
+          <span class="lab">证书名称</span>
+          <input class="input" v-model="certForm.name" placeholder="如：中级会计职称" />
+        </label>
+        <label class="field">
+          <span class="lab">报考机构（可选）</span>
+          <input class="input" v-model="certForm.org" placeholder="如：财政部会计资格评价中心" />
+        </label>
+        <p class="tiny" style="margin-bottom: 10px">
+          当前版本只维护一个证书档案：科目与考期都挂在它下面。
+        </p>
+        <div class="row" style="justify-content: flex-end; gap: 8px">
+          <button class="btn ghost" @click="showCert = false">取消</button>
+          <button class="btn" @click="saveCert">保存</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showSubj" class="modal-mask" @click.self="showSubj = false">
       <div class="modal">
         <h3>{{ subjForm.id ? '编辑科目' : '添加科目' }}</h3>

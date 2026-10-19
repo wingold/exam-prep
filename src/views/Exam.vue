@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion } from '../importers'
@@ -18,17 +18,76 @@ const chapterFilter = ref('')
 const keyOnly = ref(false)
 
 // 考试会话
-const exam = ref(null) // { paperId, questions, answers, flags, deadline }
+const exam = ref(null) // { paperId, questions, answers, flags, deadlineAt }
 const remain = ref(0)
 const tick = ref(null)
 const submitted = ref(false)
 
 const reports = ref([])
 
+/* ===== 续考草稿 =====
+   模考中途被杀进程 / 切走太久，原来的 answers 全在组件内存里，重进就没了。
+   这里把答案、标记、当前题和「截止时间」写进 localStorage：
+   存 deadlineAt 而不是「剩余秒数」，避免关掉应用的那段时间不算在倒计时里。 */
+const DRAFT_KEY = 'exam_draft_v1'
+const draftInfo = ref(null) // { total, answered, remainSec, expired, startedAt, questions: [...] }
+let saveTimer = null
+
+function saveDraft() {
+  if (!exam.value || submitted.value) return
+  const e = exam.value
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({
+      paperId: e.paperId,
+      bankId: bankId.value || e.questions[0]?.bankId || '',
+      questionIds: e.questions.map((q) => q.id),
+      answers: e.answers,
+      typed: e.typed,
+      flags: e.flags,
+      idx: e.idx,
+      startedAt: e.startedAt,
+      timeLimitMin: e.timeLimitMin,
+      deadlineAt: e.deadlineAt,
+    }))
+  } catch { /* 存储写满或被禁用时静默降级，不影响本次考试 */ }
+}
+
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY) } catch { /* 同上 */ }
+  draftInfo.value = null
+}
+
+watch(exam, () => {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(saveDraft, 250)
+}, { deep: true })
+
+async function detectDraft() {
+  let d = null
+  try { d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null') } catch { d = null }
+  if (!d || !Array.isArray(d.questionIds) || !d.questionIds.length) return
+  const qs = (await Promise.all(d.questionIds.map((id) => db.questions.get(id)))).filter(Boolean)
+  // 题目被删（题库清空/换设备合并）时草稿已经没有意义，直接丢弃
+  if (!qs.length) return clearDraft()
+  const answered = qs.filter((q) =>
+    (d.answers?.[q.id] || []).length > 0 || (d.typed?.[q.id] || '').trim().length > 0
+  ).length
+  const remainSec = Math.max(0, Math.round(((d.deadlineAt || 0) - Date.now()) / 1000))
+  draftInfo.value = {
+    raw: d,
+    questions: qs,
+    total: qs.length,
+    answered,
+    remainSec,
+    expired: remainSec <= 0,
+  }
+}
+
 onMounted(async () => {
   banks.value = await db.banks.orderBy('createdAt').reverse().toArray()
   if (route.query.bank) bankId.value = route.query.bank
   reports.value = await db.results.orderBy('at').reverse().limit(20).toArray()
+  await detectDraft()
   if (route.query.result) {
     const r = reports.value.find((x) => x.id === route.query.result)
     if (r) viewReport(r)
@@ -70,14 +129,64 @@ async function startExam() {
     idx: 0,
     startedAt: now(),
     timeLimitMin: timeLimit.value,
+    deadlineAt: now() + timeLimit.value * 60 * 1000,
   }
-  remain.value = timeLimit.value * 60
   submitted.value = false
+  clearDraft()
+  startTick()
+}
+
+/* 倒计时以 deadlineAt 为准：后台被系统冻结、熄屏、切走再回来，
+   都会按真实时间校正，不会因为定时器被节流而多给时间 */
+function syncRemain() {
+  if (!exam.value) return
+  remain.value = Math.max(0, Math.round((exam.value.deadlineAt - Date.now()) / 1000))
+}
+
+function startTick() {
   clearInterval(tick.value)
+  syncRemain()
   tick.value = setInterval(() => {
-    remain.value--
+    syncRemain()
     if (remain.value <= 0) finish()
   }, 1000)
+}
+
+/* 恢复草稿：超时的直接按已答内容交卷，未超时的继续作答 */
+function resumeDraft() {
+  const d = draftInfo.value
+  if (!d) return
+  const raw = d.raw
+  exam.value = {
+    paperId: raw.paperId,
+    questions: d.questions,
+    answers: raw.answers || {},
+    typed: raw.typed || {},
+    flags: raw.flags || {},
+    idx: Math.min(raw.idx || 0, d.questions.length - 1),
+    startedAt: raw.startedAt || now(),
+    timeLimitMin: raw.timeLimitMin || 30,
+    deadlineAt: raw.deadlineAt || now(),
+  }
+  if (raw.bankId) bankId.value = raw.bankId
+  submitted.value = false
+  draftInfo.value = null
+  if (d.expired) {
+    // 考试时间已经用完了，直接按已答内容判分，而不是再给一轮时间
+    remain.value = 0
+    finish()
+    return
+  }
+  startTick()
+}
+
+/* 暂存并退出：保留排期与答案，回到总览；下次进考试页会提示恢复 */
+function suspendExam() {
+  saveDraft()
+  clearInterval(tick.value)
+  exam.value = null
+  submitted.value = false
+  router.push('/')
 }
 
 const cur = computed(() => (exam.value ? exam.value.questions[exam.value.idx] : null))
@@ -149,7 +258,7 @@ async function finish() {
     right,
     wrong: total - right,
     rate: total ? Math.round((right / total) * 100) : 0,
-    durationSec: e.timeLimitMin * 60 - Math.max(0, remain.value),
+    durationSec: Math.min(e.timeLimitMin * 60, Math.max(0, Math.round((Date.now() - e.startedAt) / 1000))),
     perChapter,
     wrongQids,
     at: now(),
@@ -158,13 +267,15 @@ async function finish() {
   reports.value = await db.results.orderBy('at').reverse().limit(20).toArray()
   // 交卷后延迟同步：一次考试几十条作答记录，别等下一次启动才上传
   scheduleSync(10000)
+  clearDraft()
   viewReport(result)
   exam.value = null
 }
 
 function abandon() {
-  if (!confirm('放弃本次考试？成绩不会记录。')) return
+  if (!confirm('放弃本次考试？成绩不会记录，已答内容也会清空。')) return
   clearInterval(tick.value)
+  clearDraft()
   exam.value = null
   submitted.value = false
 }
@@ -204,7 +315,11 @@ function quitExam() {
   report.value = null
 }
 
-onUnmounted(() => clearInterval(tick.value))
+onUnmounted(() => {
+  clearInterval(tick.value)
+  // 组件卸载前的最后一次落盘：正常路由跳走时保住刚才那一题的答案
+  saveDraft()
+})
 </script>
 
 <template>
@@ -336,7 +451,13 @@ onUnmounted(() => clearInterval(tick.value))
             @click="exam.idx = i"
           >{{ i + 1 }}</button>
         </div>
-        <button class="btn ghost sm" style="margin-top: 12px" @click="abandon">放弃考试</button>
+        <div class="row wrap" style="margin-top: 12px; gap: 8px">
+          <button class="btn ghost sm" @click="suspendExam">暂存并退出</button>
+          <button class="btn ghost sm" @click="abandon">放弃考试</button>
+        </div>
+        <div class="tiny" style="margin-top: 8px; color: var(--ink-3)">
+          中途退出或被系统回收都会自动暂存，下次进考试页可继续作答，倒计时按真实时间计算。
+        </div>
       </div>
     </template>
 
@@ -345,6 +466,34 @@ onUnmounted(() => clearInterval(tick.value))
       <div class="page-head">
         <h1>模拟考试</h1>
         <div class="sub">限时作答，交卷生成报告</div>
+      </div>
+
+      <!-- 续考提示：上次没做完的考试还留着答案与剩余时间 -->
+      <div
+        v-if="draftInfo"
+        class="card"
+        style="margin-bottom: 16px; border-color: var(--accent); background: var(--accent-weak)"
+      >
+        <div class="row between wrap" style="gap: 12px; align-items: flex-start">
+          <div style="min-width: 0; flex: 1">
+            <div style="font-size: 14px; font-weight: 700">
+              {{ draftInfo.expired ? '上次考试已超时' : '上次考试未完成' }}
+            </div>
+            <div class="tiny" style="margin-top: 5px; line-height: 1.7">
+              已答 {{ draftInfo.answered }} / {{ draftInfo.total }} 题 ·
+              {{ draftInfo.expired ? '限时已用完' : `剩余 ${fmt(draftInfo.remainSec)}` }}<br />
+              {{ draftInfo.expired
+                ? '可以按已答内容交卷计入成绩，也可以放弃这次考试。'
+                : '答案、标记存疑和倒计时都已保留，继续作答即可。' }}
+            </div>
+          </div>
+          <div class="row" style="gap: 8px">
+            <button class="btn ghost sm" @click="clearDraft">放弃</button>
+            <button class="btn sm" @click="resumeDraft">
+              {{ draftInfo.expired ? '按已答内容交卷' : '继续作答' }}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div v-if="!banks.length" class="card empty">

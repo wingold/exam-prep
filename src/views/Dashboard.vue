@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import db, { getOrCreateCert, listSubjects, listSessions, subjectProgress } from '../db'
-import { dueCount } from '../srs'
+import { dueCount, reconcileWrongBook } from '../srs'
 import { getPlans, planProgress } from '../cardstore'
 
 const router = useRouter()
@@ -23,6 +23,8 @@ onMounted(async () => {
   subjects.value = await listSubjects(cert.value.id)
   sessions.value = await listSessions(cert.value.id)
   regs.value = await db.registrations.toArray()
+  // 错题的掌握状态由记忆排期决定，先对齐再统计，避免首页与错题本数字不一致
+  await reconcileWrongBook()
   wrongCount.value = await db.wrongItems.where('status').equals('active').count()
   reviewDue.value = await dueCount()
   // 知识卡今日到期（全部组）

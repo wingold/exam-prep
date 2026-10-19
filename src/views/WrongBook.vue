@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion } from '../importers'
-import { enrollCard, rateCard } from '../srs'
+import { enrollCard, rateCard, reconcileWrongBook, isMasteredCard, masteredHint, MASTERED_DAYS, MASTERED_REPS } from '../srs'
 import AiTutor from '../components/AiTutor.vue'
 
 const items = ref([]) // [{wrongItem, question}]
@@ -14,11 +14,15 @@ const REASONS = ['粗心', '不会', '审题', '没时间']
 const redo = ref(null) // { list, idx, answers, revealed }
 
 async function reload() {
+  // 先把错题的掌握状态与记忆卡排期对齐，再读列表
+  await reconcileWrongBook()
   const wrongs = await db.wrongItems.where('status').equals(filter.value === 'active' ? 'active' : 'cleared').toArray()
   const out = []
   for (const w of wrongs) {
     const q = await db.questions.get(w.questionId)
-    if (q) out.push({ w, q })
+    if (!q) continue
+    const card = await db.cards.get(w.questionId)
+    out.push({ w, q, card })
   }
   out.sort((a, b) => (b.w.updatedAt || 0) - (a.w.updatedAt || 0))
   items.value = out
@@ -44,7 +48,13 @@ async function toggleReason(item, r) {
 }
 
 async function markCleared(item) {
-  await db.wrongItems.update(item.w.id, { status: 'cleared', updatedAt: now() })
+  // 手动标记掌握：保留用户判断，不再被排期回收
+  await db.wrongItems.update(item.w.id, { status: 'cleared', clearedBy: 'user', updatedAt: now() })
+  await reload()
+}
+
+async function reopen(item) {
+  await db.wrongItems.update(item.w.id, { status: 'active', clearedBy: null, updatedAt: now() })
   await reload()
 }
 
@@ -94,15 +104,26 @@ async function submitRedo() {
   await db.attempts.put({ id: uid(), questionId: q.id, bankId: q.bankId, mode: 'review', chosen: [...(redo.value.answers[q.id] || [])], correct: ok, at: now() })
   const item = redo.value.list[redo.value.idx]
   if (ok) {
+    // 排期统一交给记忆队列：答对只推进一个间隔，
+    // 是否移出错题本由「间隔是否达到阈值」判定，不再用「连对 2 次」另立一套标准
+    await rateCard(q.id, 'good')
+    const card = await db.cards.get(q.id)
     const streak = (item.w.rightStreak || 0) + 1
-    const status = streak >= 2 ? 'cleared' : item.w.status
-    await db.wrongItems.update(item.w.id, { rightStreak: streak, status, updatedAt: now() })
+    const status = isMasteredCard(card) ? 'cleared' : item.w.status
+    if (status !== item.w.status) {
+      await db.wrongItems.update(item.w.id, { rightStreak: streak, status, clearedBy: status === 'cleared' ? 'srs' : null, updatedAt: now() })
+    } else {
+      await db.wrongItems.update(item.w.id, { rightStreak: streak, updatedAt: now() })
+    }
     item.w.rightStreak = streak
     item.w.status = status
-    await rateCard(q.id, 'good')
+    item.card = card
   } else {
     await db.wrongItems.update(item.w.id, { rightStreak: 0, wrongCount: (item.w.wrongCount || 1) + 1, updatedAt: now() })
     await enrollCard(q.id, { lapsed: true })
+    item.w.rightStreak = 0
+    item.w.status = 'active'
+    item.card = await db.cards.get(q.id)
   }
 }
 
@@ -172,7 +193,7 @@ function quitRedo() {
       <div v-if="redo.revealed" class="card" style="margin-bottom: 14px" :style="{ borderColor: rRight ? 'var(--green)' : 'var(--red)' }">
         <span class="tag" :class="rRight ? 'green' : 'red'">{{ rRight ? '答对了' : '还是错了' }}</span>
         <b v-if="!rRight" style="margin-left: 8px">正确答案：{{ rq.answer.join('、') }}</b>
-        <div class="tiny" style="margin-top: 6px">连续答对 2 次自动移出错题本（当前 {{ redo.list[redo.idx].w.rightStreak || 0 }} 次）</div>
+        <div class="tiny" style="margin-top: 6px">掌握由记忆排期判定 —— {{ masteredHint(redo.list[redo.idx].card) }}</div>
         <div v-if="rq.analysis" class="muted" style="margin-top: 6px; white-space: pre-wrap">解析：{{ rq.analysis }}</div>
         <div style="margin-top: 10px">
           <AiTutor :question="rq" :chosen="rChosen" />
@@ -188,7 +209,7 @@ function quitRedo() {
       <div class="page-head row between wrap">
         <div>
           <h1>错题本</h1>
-          <div class="sub">按错因归类，重做两次答对自动移出</div>
+          <div class="sub">按错因归类；是否掌握由记忆排期判定（连对 {{ MASTERED_REPS }} 次或间隔 {{ MASTERED_DAYS }} 天自动移出）</div>
         </div>
         <button class="btn" :disabled="!shown.length" @click="startRedo">
           {{ reasonFilter ? `开始「${reasonFilter}」专项（${shown.length}）` : `重做错题（${shown.length}）` }}
@@ -215,7 +236,7 @@ function quitRedo() {
           <div>
             <b style="color: var(--accent)">「{{ reasonFilter }}」错因专项</b>
             <div class="tiny" style="margin-top: 2px">
-              从 {{ shown.length }} 道因「{{ reasonFilter }}」而出错的题开始集中突破，连续答对 2 次自动移出
+              从 {{ shown.length }} 道因「{{ reasonFilter }}」而出错的题开始集中突破，答对会推进记忆间隔，连对 {{ MASTERED_REPS }} 次或间隔满 {{ MASTERED_DAYS }} 天自动移出
             </div>
           </div>
           <button class="btn" :disabled="!shown.length" @click="startRedo">开始专项练习</button>
@@ -243,10 +264,15 @@ function quitRedo() {
 
       <div v-for="item in shown" :key="item.w.id" class="card" style="margin-bottom: 12px">
         <div class="row between wrap" style="margin-bottom: 8px">
-          <span class="tiny">错 {{ item.w.wrongCount }} 次 · {{ item.q.chapter || '未分类' }}</span>
+          <span class="tiny">
+            错 {{ item.w.wrongCount }} 次 · {{ item.q.chapter || '未分类' }}
+            <template v-if="item.card"> · 连对 {{ item.card.reps || 0 }} 次 / 间隔 {{ item.card.intervalDays || 0 }} 天</template>
+            <template v-if="item.w.clearedBy === 'user'"> · 手动标注掌握</template>
+          </span>
           <div class="row" style="gap: 6px">
             <button class="btn ghost sm" @click="remove(item)">移除</button>
             <button v-if="filter === 'active'" class="btn ghost sm" @click="markCleared(item)">标记掌握</button>
+            <button v-else class="btn ghost sm" @click="reopen(item)">重新纳入</button>
           </div>
         </div>
         <div style="font-weight: 600; white-space: pre-wrap; margin-bottom: 8px">{{ item.q.stem.slice(0, 160) }}</div>

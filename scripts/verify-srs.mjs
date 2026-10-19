@@ -14,7 +14,7 @@ const code = fs.readFileSync(srcPath, 'utf8').replace(
 )
 fs.writeFileSync(tmp, code)
 
-const { nextSchedule, previewIntervals, intervalLabel, capInterval } = await import(pathToFileURL(tmp).href)
+const { nextSchedule, previewIntervals, intervalLabel, capInterval, isMasteredCard, MASTERED_DAYS, MASTERED_REPS } = await import(pathToFileURL(tmp).href)
 fs.unlinkSync(tmp)
 
 let bad = 0
@@ -63,6 +63,34 @@ for (const [days, exam, want, desc] of capCases) {
   console.log(`封顶 ${desc}: ${days} 天 → ${got} 天${got === want ? '' : `（预期 ${want}）`}`)
   if (got !== want) bad++
 }
+
+/* 掌握判定（方案 A）：连对 4 次 或 间隔 ≥ 21 天，缺一不可地用「或」兜住考试封顶场景 */
+console.log(`\n掌握阈值：连对 ${MASTERED_REPS} 次 或 间隔 ${MASTERED_DAYS} 天`)
+const masterCases = [
+  [{ intervalDays: 0, reps: 0 }, false, '刚入队（次日到期）'],
+  [{ intervalDays: 3, reps: 2 }, false, '连对 2 次、间隔 3 天'],
+  [{ intervalDays: 20, reps: 3 }, false, '间隔 20 天但只连对 3 次'],
+  [{ intervalDays: 21, reps: 3 }, true, '间隔达到 21 天'],
+  [{ intervalDays: 13, reps: 4 }, true, '考试封顶压住间隔，靠连对 4 次达标'],
+  [{ intervalDays: 1, reps: 0, lapses: 2 }, false, '答错被打回 1 天'],
+  [null, false, '没有卡片'],
+]
+for (const [card, want, desc] of masterCases) {
+  const got = isMasteredCard(card)
+  console.log(`  ${desc}: ${got ? '已掌握' : '待复习'}${got === want ? '' : `（预期 ${want}）`}`)
+  if (got !== want) bad++
+}
+
+/* 模拟考试封顶下的真实路径：40 天后考试，连对 4 次应当移出错题本 */
+let mc = { intervalDays: 0, ease: 2.5, reps: 0, lapses: 0 }
+const trail = []
+for (let i = 0; i < 4; i++) {
+  mc = nextSchedule(mc, 'good')
+  mc.intervalDays = capInterval(mc.intervalDays, 40)
+  trail.push(`${mc.intervalDays}天/连对${mc.reps}`)
+}
+console.log(`  考期 40 天下连续答对: ${trail.join(' → ')} → ${isMasteredCard(mc) ? '移出错题本' : '仍在待复习'}`)
+if (!isMasteredCard(mc)) { bad++; console.log('  连对 4 次后仍未掌握，考试封顶场景失效') }
 
 console.log(bad === 0 ? '全部检查通过 ✓' : `${bad} 项不符`)
 process.exit(bad === 0 ? 0 : 1)

@@ -67,7 +67,10 @@ export async function refreshExamCap() {
 export async function enrollCard(questionId, { lapsed = false } = {}) {
   const existing = await db.cards.get(questionId)
   if (existing) {
-    if (lapsed) await db.cards.update(questionId, nextSchedule(existing, 'again'))
+    if (lapsed) {
+      await db.cards.update(questionId, nextSchedule(existing, 'again'))
+      await syncWrongItem(questionId)
+    }
     return
   }
   await db.cards.put({
@@ -79,6 +82,7 @@ export async function enrollCard(questionId, { lapsed = false } = {}) {
     lapses: 0,
     updatedAt: now(),
   })
+  await syncWrongItem(questionId)
 }
 
 /* 纯调度函数：题目卡与知识卡共用（SM-2 简化） */
@@ -121,11 +125,70 @@ export function intervalLabel(days) {
   return n <= 1 ? '明天' : `${n} 天后`
 }
 
+/* ===== 掌握判定：唯一由排期决定（方案 A） =====
+   记忆队列是唯一调度器，错题本只负责收录、标错因、展示。
+   「掌握」＝ 连续 4 次没答错（reps ≥ 4）或 单卡间隔 ≥ 21 天。
+   必须带 reps 这一条：叠加考试日封顶后，间隔会被压在「距考试天数/3」，
+   临近考试时可能长期卡在 13 天，只按间隔判定会让错题永远移不出去。 */
+
+export const MASTERED_REPS = 4
+export const MASTERED_DAYS = 21
+
+export function isMasteredCard(card) {
+  if (!card) return false
+  return (card.reps || 0) >= MASTERED_REPS || (card.intervalDays || 0) >= MASTERED_DAYS
+}
+
+/* 掌握状态的文字说明，供界面复用，避免各处口径不一 */
+export function masteredHint(card) {
+  const reps = card ? card.reps || 0 : 0
+  const days = card ? card.intervalDays || 0 : 0
+  return `连续答对 ${reps}/${MASTERED_REPS} 次 · 间隔 ${days} 天（满 ${MASTERED_DAYS} 天或连对 ${MASTERED_REPS} 次即掌握）`
+}
+
+/* 手动标记掌握的用户决定不参与自动回收 */
+async function syncWrongItem(questionId) {
+  const w = await db.wrongItems.where('questionId').equals(questionId).first()
+  if (!w || w.clearedBy === 'user') return null
+  const card = await db.cards.get(questionId)
+  // 没有卡片的错题不动：没有排期依据时保持原状，避免把历史数据全部翻回待复习
+  if (!card) return null
+  const status = isMasteredCard(card) ? 'cleared' : 'active'
+  if (w.status === status) return null
+  await db.wrongItems.update(w.id, {
+    status,
+    clearedBy: status === 'cleared' ? 'srs' : null,
+    updatedAt: now(),
+  })
+  return status
+}
+
+/* 全量对齐：页面加载时兜一次，保证列表与排期一致 */
+export async function reconcileWrongBook() {
+  const wrongs = await db.wrongItems.toArray()
+  let changed = 0
+  for (const w of wrongs) {
+    if (w.clearedBy === 'user') continue
+    const card = await db.cards.get(w.questionId)
+    if (!card) continue
+    const status = isMasteredCard(card) ? 'cleared' : 'active'
+    if (w.status === status) continue
+    await db.wrongItems.update(w.id, {
+      status,
+      clearedBy: status === 'cleared' ? 'srs' : null,
+      updatedAt: now(),
+    })
+    changed++
+  }
+  return changed
+}
+
 /* 评分调度 */
 export async function rateCard(questionId, rating) {
   const card = await db.cards.get(questionId)
   if (!card) return
   await db.cards.update(questionId, nextSchedule(card, rating))
+  await syncWrongItem(questionId)
 }
 
 /* 今日到期的卡片（连题目一起返回） */

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import mammoth from 'mammoth/mammoth.browser'
 import * as XLSX from 'xlsx'
-import db, { uid, now, plain, getOrCreateCert, listSubjects } from '../db'
+import db, { uid, now, plain, getOrCreateCert, listSubjects, exportBank } from '../db'
 import { parseJson, parseText, parseSheetRows } from '../importers'
 import { aiReady } from '../ai'
 import { aiStore, startPdfTask } from '../aistore'
@@ -122,6 +122,32 @@ async function assignSubject(b, ev) {
   await db.banks.update(b.id, { subjectId: ev.target.value || null })
 }
 
+/* 单题库导出：格式与导入一致，导出的文件可直接再导入 */
+async function exportBankFile(b) {
+  importMsg.value = ''
+  importErr.value = ''
+  try {
+    const data = await exportBank(b.id)
+    if (!data.questions.length) throw new Error('该题库没有题目可导出')
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${safeFileName(b.name)}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    importMsg.value = `已导出「${b.name}」共 ${data.questions.length} 题`
+  } catch (e) {
+    importErr.value = '导出失败：' + e.message
+  }
+}
+
+function safeFileName(s) {
+  return String(s || '题库').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60)
+}
+
 function chapters(p) {
   const set = new Set(p.questions.map((q) => q.chapter).filter(Boolean))
   return [...set]
@@ -159,7 +185,7 @@ function cancelPdf() {
     <div class="page-head row between wrap">
       <div>
         <h1>题库</h1>
-        <div class="sub">导入 Word / Excel / JSON / 文本题库；PDF 讲义可 AI 出题</div>
+        <div class="sub">导入 Word / Excel / JSON / 文本题库；PDF 讲义可 AI 出题；单个题库可导出 JSON</div>
       </div>
       <div class="row" style="gap: 8px">
         <button class="btn ghost" :disabled="importing || !!pdfTask" @click="pdfInput.click()">
@@ -266,7 +292,10 @@ function cancelPdf() {
       <div v-for="b in banks" :key="b.id" class="card">
         <div class="row between" style="margin-bottom: 6px">
           <b>{{ b.name }}</b>
-          <button class="btn ghost sm" @click="delBank(b)">删</button>
+          <div class="row" style="gap: 4px">
+            <button class="btn ghost sm" @click="exportBankFile(b)">导出</button>
+            <button class="btn ghost sm" @click="delBank(b)">删</button>
+          </div>
         </div>
         <div class="tiny" style="margin-bottom: 8px">{{ questionCount[b.id] || 0 }} 题 · 来源 {{ b.source || '—' }}</div>
         <select class="input" style="font-size: 13px" :value="b.subjectId || ''" @change="assignSubject(b, $event)">

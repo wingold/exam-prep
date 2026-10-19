@@ -13,3 +13,17 @@ android-build.log
 gradle-help.log
 .playwright-cli/
 mock-dav/
+
+# 签名密钥：绝不入库（丢失将永久无法覆盖升级）
+*.jks
+*.keystore
+keystore.properties
+
+# 本地题库（由个人课件生成，含课程内容，不公开）
+banks/
+
+# 本地出包产物
+release/
+
+# 本地协作记忆
+.workbuddy/

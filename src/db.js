@@ -107,6 +107,30 @@ export async function subjectProgress(subjectId) {
   return Math.round((0.4 * coverageRate + 0.3 * clearRate + 0.3 * recentScore) * 100)
 }
 
+/* ========== 单题库导出（PRD 附录 A 格式，可被 parseJson 原样回导） ========== */
+
+export async function exportBank(bankId) {
+  const bank = await db.banks.get(bankId)
+  if (!bank) throw new Error('题库不存在')
+  const subject = bank.subjectId ? await db.subjects.get(bank.subjectId) : null
+  const qs = await db.questions.where('bankId').equals(bankId).sortBy('seq')
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    bank: { name: bank.name, subject: subject ? subject.name : '' },
+    questions: qs.map((q) => ({
+      type: q.type,
+      chapter: q.chapter || '',
+      stem: q.stem,
+      // 判断题导出时补齐默认选项，保证第三方工具与回导行为一致
+      options: q.type === 'judge' && !(q.options || []).length ? ['对', '错'] : (q.options || []),
+      answer: q.answer || [],
+      analysis: q.analysis || '',
+      difficulty: q.difficulty || '',
+    })),
+  }
+}
+
 /* ========== 全量导出 / 导入 ========== */
 
 const TABLES = [

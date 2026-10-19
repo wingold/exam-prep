@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node scripts/verify-srs.mjs && node scripts/verify-bank-roundtrip.mjs",
+    "check:assets": "node scripts/verify-apk-assets.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.3",

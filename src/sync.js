@@ -33,6 +33,33 @@ export function syncReady() {
   return !!(c.url && c.user && c.pass)
 }
 
+/* ===== 同步状态留痕 =====
+   自动同步失败原来是静默的（只把页脚文案改回去），用户可能长期以为在同步，
+   等到卸载重装才发现云端是很久以前的快照。这里把「上次成功时间 / 失败原因」
+   落到 localStorage，给界面一个可验证的依据。 */
+const STATUS_KEY = 'sync_status'
+
+export function getSyncStatus() {
+  try {
+    return JSON.parse(localStorage.getItem(STATUS_KEY)) || null
+  } catch {
+    return null
+  }
+}
+
+export function clearSyncStatus() {
+  localStorage.removeItem(STATUS_KEY)
+}
+
+function patchSyncStatus(patch) {
+  try {
+    localStorage.setItem(STATUS_KEY, JSON.stringify({ ...(getSyncStatus() || {}), ...patch }))
+  } catch { /* 隐私模式写不进去时不影响同步本身 */ }
+}
+
+/* 超过这个天数没成功同步就该当心了 */
+export const SYNC_STALE_DAYS = 3
+
 /* URL 校验：拦截网页版地址等常见填错 */
 export function validateDavUrl(url) {
   const u = (url || '').trim()
@@ -268,8 +295,57 @@ export async function runSync() {
     merged.exportedAt = new Date().toISOString()
     merged.syncedAt = now()
     await uploadRemote(c, merged)
+    patchSyncStatus({ ok: true, at: now(), action, error: null, failAt: null })
     return action
+  } catch (e) {
+    // 失败要留痕：界面据此显示「同步失败 · 见设置」，不再静默
+    patchSyncStatus({ ok: false, failAt: now(), error: (e && e.message) || String(e) })
+    throw e
   } finally {
     inFlight = false
   }
+}
+
+/* ===== 作答后延迟同步 =====
+   原来只有「启动 2.5 秒」和「每 30 分钟」两个触发点，刷完一轮就关应用的那一段
+   根本不会上传。这里在作答后延迟触发一次：同步读的是触发那一刻的全部本地数据，
+   所以期间继续答题的内容会一并带上，不需要每次都重新计时。 */
+let scheduledTimer = null
+
+export function scheduleSync(delay = 20000, minGapMs = 120000) {
+  if (!syncReady()) return
+  // 已经有排队的同步就不再往后推：否则连续答题会把计时器一直重置，
+  // 从头答到尾都不会上传，直到停手才触发
+  if (scheduledTimer) return
+  // 两次自动同步之间至少隔 2 分钟：否则连续答题会变成每 20 秒上传一次全量数据
+  const st = getSyncStatus()
+  const since = st && st.at ? Date.now() - st.at : Number.POSITIVE_INFINITY
+  const wait = since < minGapMs ? Math.max(delay, minGapMs - since) : delay
+  scheduledTimer = setTimeout(async () => {
+    scheduledTimer = null
+    // 正有同步在跑：这次别丢，稍后再补一次
+    if (inFlight) return scheduleSync(30000, minGapMs)
+    try {
+      await runSync()
+    } catch {
+      // 失败原因已记录在 sync_status，作答过程不被打断
+    }
+  }, wait)
+}
+
+export function cancelScheduledSync() {
+  if (scheduledTimer) clearTimeout(scheduledTimer)
+  scheduledTimer = null
+}
+
+/* 应用切到后台/关闭前立刻补一次：手机用户常常刷完就退，
+   等不到 20 秒的延迟，那段作答就永远上不了云 */
+export async function flushScheduledSync() {
+  if (!scheduledTimer) return
+  clearTimeout(scheduledTimer)
+  scheduledTimer = null
+  if (inFlight) return
+  try {
+    await runSync()
+  } catch { /* 失败已记录在 sync_status */ }
 }

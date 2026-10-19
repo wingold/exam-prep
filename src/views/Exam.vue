@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion } from '../importers'
 import { enrollCard } from '../srs'
+import { scheduleSync } from '../sync'
 
 const route = useRoute()
 const router = useRouter()
@@ -155,6 +156,8 @@ async function finish() {
   }
   await db.results.put(result)
   reports.value = await db.results.orderBy('at').reverse().limit(20).toArray()
+  // 交卷后延迟同步：一次考试几十条作答记录，别等下一次启动才上传
+  scheduleSync(10000)
   viewReport(result)
   exam.value = null
 }

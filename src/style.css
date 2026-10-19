@@ -101,6 +101,9 @@ h1, h2, h3, h4, p { margin: 0; }
   padding: 8px 12px;
 }
 
+/* 同步异常（失败 / 超过 3 天未成功）用琥珀色点出来，正常时不抢注意力 */
+.side .foot.warn { color: var(--amber); }
+
 .main {
   flex: 1;
   min-width: 0;
@@ -190,6 +193,21 @@ h1, h2, h3, h4, p { margin: 0; }
     background: var(--accent-weak);
     color: var(--accent);
   }
+  /* 同步状态行：占满一行，样式弱化为说明文字而不是导航入口 */
+  .more-item.more-sync {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 8px;
+    margin-top: 4px;
+    padding: 10px 4px 2px;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    font-weight: 500;
+    color: var(--ink-3);
+  }
+  .more-item.more-sync .ico { font-size: 14px; }
+  .more-item.more-sync.warn { color: var(--amber); }
 }
 
 /* ===== 通用元件 ===== */

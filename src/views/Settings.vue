@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { Capacitor } from '@capacitor/core'
 import { exportAll, importAll } from '../db'
 import { getAIConfig, setAIConfig } from '../ai'
-import { getWebdavConfig, setWebdavConfig, runSync, validateDavUrl, testConnection } from '../sync'
+import { getWebdavConfig, setWebdavConfig, runSync, validateDavUrl, testConnection, getSyncStatus } from '../sync'
 
 const isNative = Capacitor.isNativePlatform()
 // 由 vite define 注入，取自 package.json（与 Android versionName 同源）
@@ -24,6 +24,25 @@ const testMsg = ref('')
 const testOk = ref(null)
 
 const urlHint = computed(() => validateDavUrl(wd.value.url))
+
+/* 同步留痕：这里必须能直接看到「上次什么时候成功的」，
+   自动同步静默失败时这是唯一能查的地方 */
+const syncStat = ref(getSyncStatus())
+const lastSyncAtText = computed(() => {
+  const st = syncStat.value
+  if (!st || !st.at) return '从未成功'
+  const d = new Date(st.at)
+  const days = Math.floor((Date.now() - st.at) / 86400e3)
+  const t = d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return days >= 1 ? `${t}（${days} 天前）` : t
+})
+const lastSyncErrText = computed(() => {
+  const st = syncStat.value
+  return st && st.ok === false ? st.error || '未知错误' : ''
+})
+function refreshSyncStat() {
+  syncStat.value = getSyncStatus()
+}
 const formReady = computed(() => !!(wd.value.url.trim() && wd.value.user.trim() && wd.value.pass.trim()) && !urlHint.value)
 const proxyShown = computed(() => {
   if (isNative) return '当前为手机 APK：走原生网络直连，无需代理，此项留空即可'
@@ -52,6 +71,7 @@ onMounted(async () => {
   }
   ai.value = getAIConfig()
   wd.value = getWebdavConfig()
+  refreshSyncStat()
 })
 
 function saveAI() {
@@ -89,6 +109,7 @@ async function doSync() {
     syncErr.value = e.message
   } finally {
     syncing.value = false
+    refreshSyncStat()
   }
 }
 
@@ -216,6 +237,10 @@ async function doImport(ev, mode) {
           当前生效：{{ proxyShown }}。部署到静态网站后需自建 Worker（项目根目录 cloudflare-worker.js，附部署说明）。
         </span>
       </label>
+      <div class="tiny" style="margin: 2px 0 12px">
+        上次成功同步：<b>{{ lastSyncAtText }}</b>
+        <span v-if="lastSyncErrText" style="color: var(--red)"> · 最近一次失败：{{ lastSyncErrText }}</span>
+      </div>
       <div class="row" style="gap: 10px">
         <button class="btn" :disabled="syncing || !formReady" @click="doSync">
           {{ syncing ? '同步中…' : '立即同步' }}

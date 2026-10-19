@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion } from '../importers'
 import { dueCards, enrollCard, rateCard, dueCount, previewIntervals, intervalLabel, refreshExamCap } from '../srs'
+import { scheduleSync } from '../sync'
 import AiTutor from '../components/AiTutor.vue'
 
 const route = useRoute()
@@ -156,6 +157,8 @@ async function recordAttempt() {
     await addWrong(q.id, [])
     await enrollCard(q.id, { lapsed: true })
   }
+  // 作答后延迟同步（合并触发，不打断答题）；未配 WebDAV 时内部直接返回
+  scheduleSync()
 }
 
 async function addReason(questionId, reason) {
@@ -215,6 +218,7 @@ async function rate(r) {
   await rateCard(cur.value.id, r)
   due.value = await dueCount()
   await refreshNextDue()
+  scheduleSync()
   next()
 }
 

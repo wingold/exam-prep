@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion } from '../importers'
 import { enrollCard, rateCard, reconcileWrongBook, isMasteredCard, masteredHint, MASTERED_DAYS, MASTERED_REPS } from '../srs'
+import { scheduleSync } from '../sync'
 import AiTutor from '../components/AiTutor.vue'
 
 const items = ref([]) // [{wrongItem, question}]
@@ -125,6 +126,7 @@ async function submitRedo() {
     item.w.status = 'active'
     item.card = await db.cards.get(q.id)
   }
+  scheduleSync()
 }
 
 function nextRedo() {

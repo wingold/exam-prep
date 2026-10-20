@@ -30,3 +30,6 @@ release/
 
 # 图标渲染中间产物（源文件在 scripts/icon-render.html，可再生）
 .icon-tmp/
+
+# 真题抓取中间产物（纯文本源，题库存 banks/）
+.exam-tmp/

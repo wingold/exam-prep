@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import db, { uid, now } from '../db'
-import { isCorrect, isKeyQuestion } from '../importers'
+import { isCorrect, isKeyQuestion, needsSelfEval } from '../importers'
+import { typeLabel, typeScore, typeHint, SELF_EVAL, evalRating } from '../questiontypes'
 import { enrollCard, rateCard, reconcileWrongBook, isMasteredCard, masteredHint, MASTERED_DAYS, MASTERED_REPS } from '../srs'
 import { scheduleSync } from '../sync'
 import Icon from '../components/Icon.vue'
@@ -69,6 +70,8 @@ async function remove(item) {
 /* ---- 错题重做 ---- */
 function startRedo() {
   if (!shown.value.length) return
+  rSelf.value = null
+  rTyped.value = ''
   redo.value = {
     list: shown.value.map((i) => ({ ...i })),
     idx: 0,
@@ -93,22 +96,44 @@ function toggleR(letter) {
   redo.value.answers[q.id] = arr
 }
 
-const rRight = computed(() => rq.value ? isCorrect(rq.value, rChosen.value) : false)
+// 主观题（名词解释/简答/论述/材料）判不了，由考生对照参考答案自评
+const rSelf = ref(null)
+const rSubjective = computed(() => !!rq.value && needsSelfEval(rq.value))
+const rRight = computed(() => {
+  if (!rq.value) return false
+  if (rSubjective.value) return rSelf.value === 'hit'
+  return isCorrect(rq.value, rChosen.value)
+})
+const rSelfLabel = computed(() => SELF_EVAL.find((x) => x.key === rSelf.value)?.label || '')
 
 const rTyped = ref('')
 
 async function submitRedo() {
   const q = rq.value
-  if (q.type === 'fill' || q.type === 'essay') redo.value.answers[q.id] = [rTyped.value]
-  if (!(redo.value.answers[q.id] || []).length && q.type !== 'essay' && q.type !== 'fill') return
+  if (q.type === 'fill' || needsSelfEval(q)) redo.value.answers[q.id] = [rTyped.value]
+  if (!(redo.value.answers[q.id] || []).length && !needsSelfEval(q) && q.type !== 'fill') return
   redo.value.revealed = true
-  const ok = rRight.value
+  // 主观题先亮参考答案，等自评后再记作答与排期
+  if (needsSelfEval(q)) return
+  await commitRedo(true, 'good')
+}
+
+/* 自评后落盘：答对走 good，答一半走 hard，没答出来按 again 重排 */
+async function gradeRedoSelf(key) {
+  if (!redo.value || rSelf.value) return
+  rSelf.value = key
+  await commitRedo(key === 'hit', evalRating(key))
+}
+
+async function commitRedo(_auto, rating) {
+  const q = rq.value
+  const ok = _auto === undefined ? rRight.value : _auto
   await db.attempts.put({ id: uid(), questionId: q.id, bankId: q.bankId, mode: 'review', chosen: [...(redo.value.answers[q.id] || [])], correct: ok, at: now() })
   const item = redo.value.list[redo.value.idx]
   if (ok) {
     // 排期统一交给记忆队列：答对只推进一个间隔，
     // 是否移出错题本由「间隔是否达到阈值」判定，不再用「连对 2 次」另立一套标准
-    await rateCard(q.id, 'good')
+    await rateCard(q.id, rating || 'good')
     const card = await db.cards.get(q.id)
     const streak = (item.w.rightStreak || 0) + 1
     const status = isMasteredCard(card) ? 'cleared' : item.w.status
@@ -123,6 +148,7 @@ async function submitRedo() {
   } else {
     await db.wrongItems.update(item.w.id, { rightStreak: 0, wrongCount: (item.w.wrongCount || 1) + 1, updatedAt: now() })
     await enrollCard(q.id, { lapsed: true })
+    await rateCard(q.id, rating || 'again')
     item.w.rightStreak = 0
     item.w.status = 'active'
     item.card = await db.cards.get(q.id)
@@ -133,6 +159,7 @@ async function submitRedo() {
 function nextRedo() {
   redo.value.revealed = false
   rTyped.value = ''
+  rSelf.value = null
   if (redo.value.idx + 1 >= redo.value.list.length) {
     redo.value = null
     reload()
@@ -161,7 +188,7 @@ function quitRedo() {
           <span class="tiny">{{ rq.chapter || '' }}</span>
           <div class="row" style="gap: 6px">
             <span class="tag red" v-if="isKeyQuestion(rq)">重点</span>
-            <span class="tag">{{ { single: '单选', multi: '多选', judge: '判断', fill: '填空', essay: '简答' }[rq.type] }}</span>
+            <span class="tag">{{ typeLabel(rq.type) }}</span>
           </div>
         </div>
         <div style="font-size: 16px; font-weight: 600; white-space: pre-wrap">{{ rq.stem }}</div>
@@ -190,21 +217,54 @@ function quitRedo() {
         </button>
       </div>
       <div v-else style="margin-bottom: 16px">
-        <textarea class="input" rows="4" v-model="rTyped" :disabled="redo.revealed" placeholder="输入答案"></textarea>
+        <textarea
+          class="input"
+          :rows="rSubjective ? (rq.type === 'term' ? 4 : 6) : 3"
+          v-model="rTyped"
+          :disabled="redo.revealed"
+          :placeholder="rSubjective ? typeHint(rq.type) + '；提交后对照参考答案自评' : '输入答案'"
+        ></textarea>
+        <div v-if="rSubjective" class="tiny" style="margin-top: 6px; color: var(--ink-3)">
+          {{ typeLabel(rq.type) }} · {{ typeScore(rq.type) }} 分
+        </div>
       </div>
 
-      <div v-if="redo.revealed" class="card" style="margin-bottom: 14px" :style="{ borderColor: rRight ? 'var(--green)' : 'var(--red)' }">
-        <span class="tag" :class="rRight ? 'green' : 'red'">{{ rRight ? '答对了' : '还是错了' }}</span>
-        <b v-if="!rRight" style="margin-left: 8px">正确答案：{{ rq.answer.join('、') }}</b>
-        <div class="tiny" style="margin-top: 6px">掌握由记忆排期判定 —— {{ masteredHint(redo.list[redo.idx].card) }}</div>
+      <div
+        v-if="redo.revealed"
+        class="card"
+        style="margin-bottom: 14px"
+        :style="{ borderColor: rSubjective ? (rSelf ? (rRight ? 'var(--green)' : 'var(--amber)') : 'var(--line)') : (rRight ? 'var(--green)' : 'var(--red)') }"
+      >
+        <template v-if="rSubjective">
+          <span class="tag" :class="rSelf ? 'green' : 'amber'">{{ rSelf ? rSelfLabel : '待自评' }}</span>
+          <b class="tiny" style="margin-left: 8px; color: var(--ink-2)">{{ typeLabel(rq.type) }} · {{ typeScore(rq.type) }} 分</b>
+          <div style="margin-top: 10px">
+            <div class="tiny" style="color: var(--ink-3); margin-bottom: 3px">参考答案</div>
+            <div class="tiny" style="background: var(--green-weak); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.9">{{ (rq.answer || []).join('\n') }}</div>
+          </div>
+          <div v-if="!rSelf" class="row wrap" style="margin-top: 12px; gap: 8px">
+            <span class="tiny" style="width: 100%; color: var(--ink-2)">对照参考答案，你答到了几成？</span>
+            <button v-for="e in SELF_EVAL" :key="e.key" class="btn sm ghost" @click="gradeRedoSelf(e.key)">{{ e.label }}</button>
+          </div>
+        </template>
+        <template v-else>
+          <span class="tag" :class="rRight ? 'green' : 'red'">{{ rRight ? '答对了' : '还是错了' }}</span>
+          <b v-if="!rRight" style="margin-left: 8px">正确答案：{{ rq.answer.join('、') }}</b>
+        </template>
+
+        <div class="tiny" style="margin-top: 8px">掌握由记忆排期判定 —— {{ masteredHint(redo.list[redo.idx].card) }}</div>
         <div v-if="rq.analysis" class="muted" style="margin-top: 6px; white-space: pre-wrap">解析：{{ rq.analysis }}</div>
         <div style="margin-top: 10px">
           <AiTutor :question="rq" :chosen="rChosen" />
         </div>
       </div>
 
-      <button v-if="!redo.revealed" class="btn block" :disabled="!rChosen.length && rq.type !== 'essay' && rq.type !== 'fill'" @click="submitRedo">提交</button>
-      <button v-else class="btn block" @click="nextRedo">{{ redo.idx + 1 >= redo.list.length ? '完成' : '下一题' }}</button>
+      <button v-if="!redo.revealed" class="btn block" :disabled="!rSubjective && !rChosen.length" @click="submitRedo">
+        {{ rSubjective ? '提交并看参考答案' : '提交' }}
+      </button>
+      <button v-else class="btn block" :disabled="rSubjective && !rSelf" @click="nextRedo">
+        {{ rSubjective && !rSelf ? '先自评再继续' : (redo.idx + 1 >= redo.list.length ? '完成' : '下一题') }}
+      </button>
     </template>
 
     <!-- ===== 错题列表 ===== -->

@@ -2,7 +2,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import db, { uid, now } from '../db'
-import { isCorrect, isKeyQuestion } from '../importers'
+import { isCorrect, isKeyQuestion, needsSelfEval } from '../importers'
+import { typeLabel, typeHint, typeScore, SELF_EVAL, evalRatio } from '../questiontypes'
 import { dueCards, enrollCard, rateCard, dueCount, previewIntervals, intervalLabel, refreshExamCap } from '../srs'
 import { scheduleSync } from '../sync'
 import { getPrefs } from '../prefs'
@@ -23,6 +24,8 @@ const due = ref(0)
 const cardCount = ref(0)
 const wrongTotal = ref(0)
 const enrolledNow = ref({}) // qid -> true（本题已手动加入）
+// 主观题自评档位：'hit' | 'half' | 'miss'，一题只评一次
+const selfPick = ref(null)
 const keyCount = ref(0)
 const nextDueText = ref('') // 今天没有到期卡时，显示最近一张的到期日
 const examDays = ref(null) // 距最近考试天数；null = 没有未来考期
@@ -135,18 +138,31 @@ const typedAnswer = ref('')
 function submit() {
   if (!cur.value) return
   const q = cur.value
-  if (q.type === 'fill' || q.type === 'essay') {
+  if (!isObjectiveType(q)) {
     session.value.answers[q.id] = [typedAnswer.value]
   }
-  if (!(session.value.answers[q.id] || []).length && q.type !== 'essay') return
+  if (!(session.value.answers[q.id] || []).length && !needsSelfEval(q)) return
   session.value.revealed = true
+  // 主观题先给参考答案，等考生自评后再决定对错与复习节奏
+  if (needsSelfEval(q)) return
   recordAttempt()
 }
 
-async function recordAttempt() {
+function isObjectiveType(q) {
+  return !needsSelfEval(q) && q.type !== 'fill'
+}
+
+/* 主观题自评：系统判不了表述，只有考生自己知道答到了几成 */
+async function gradeSelf(key) {
+  if (!cur.value || selfPick.value) return
+  selfPick.value = key
+  await recordAttempt(key === 'hit', key === 'hit' ? 'good' : key === 'half' ? 'hard' : 'again')
+}
+
+async function recordAttempt(okOverride, rating) {
   const q = cur.value
   const chosen = session.value.answers[q.id] || []
-  const ok = isCorrect(q, chosen)
+  const ok = okOverride === undefined ? isCorrect(q, chosen) : okOverride
   await db.attempts.put({
     id: uid(),
     questionId: q.id,
@@ -159,6 +175,7 @@ async function recordAttempt() {
   if (!ok) {
     await addWrong(q.id, [])
     await enrollCard(q.id, { lapsed: true })
+    await rateCard(q.id, rating || 'again')
   }
   // 作答后延迟同步（合并触发，不打断答题）；未配 WebDAV 时内部直接返回
   scheduleSync()
@@ -194,9 +211,18 @@ async function addWrong(questionId, reasons) {
   }
 }
 
+function prev() {
+  if (!session.value || session.value.idx === 0) return
+  session.value.idx--
+  session.value.revealed = false
+  typedAnswer.value = ''
+  selfPick.value = null
+}
+
 function next() {
   session.value.revealed = false
   typedAnswer.value = ''
+  selfPick.value = null
   if (session.value.idx + 1 >= session.value.questions.length) {
     finished.value = true
   } else {
@@ -251,7 +277,13 @@ function quit() {
   }
 }
 
-const isRight = computed(() => cur.value ? isCorrect(cur.value, curChosen.value) : false)
+const isRight = computed(() => {
+  if (!cur.value) return false
+  if (needsSelfEval(cur.value)) return selfPick.value === 'hit'
+  return isCorrect(cur.value, curChosen.value)
+})
+const isSubjective = computed(() => !!cur.value && needsSelfEval(cur.value))
+const selfLabel = computed(() => SELF_EVAL.find((x) => x.key === selfPick.value)?.label || '')
 
 /* 当前卡三档评分分别推到多久：直接显示在按钮上 */
 const nextPreview = computed(() => {
@@ -423,21 +455,53 @@ const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章
       <div v-else style="margin-bottom: 16px">
         <textarea
           class="input"
-          rows="4"
+          :rows="isSubjective ? (cur.type === 'term' ? 4 : 6) : 3"
           v-model="typedAnswer"
           :disabled="session.revealed"
-          :placeholder="cur.type === 'essay' ? '写下你的答案，提交后对照参考答案' : '输入答案'"
+          :placeholder="isSubjective ? typeHint(cur.type) + '；提交后对照参考答案自评' : '输入答案'"
         ></textarea>
+        <div v-if="isSubjective" class="tiny" style="margin-top: 6px; color: var(--ink-3)">
+          {{ typeLabel(cur.type) }} · {{ typeScore(cur.type) }} 分
+        </div>
       </div>
 
       <!-- 提交后反馈 -->
-      <div v-if="session.revealed" class="card" style="margin-bottom: 14px" :style="{ borderColor: isRight ? 'var(--green)' : 'var(--red)' }">
-        <div class="row" style="margin-bottom: 6px">
-          <span class="tag" :class="isRight ? 'green' : 'red'">{{ isRight ? '答对了' : '答错了' }}</span>
-          <b v-if="!isRight">正确答案：{{ cur.answer.join('、') || '（见解析）' }}</b>
+      <div
+        v-if="session.revealed"
+        class="card"
+        style="margin-bottom: 14px"
+        :style="{ borderColor: isSubjective ? (selfPick ? (isRight ? 'var(--green)' : 'var(--amber)') : 'var(--line)') : (isRight ? 'var(--green)' : 'var(--red)') }"
+      >
+        <div class="row wrap" style="margin-bottom: 6px; gap: 8px">
+          <template v-if="isSubjective">
+            <span class="tag" :class="selfPick ? 'green' : 'amber'">{{ selfPick ? selfLabel : '待自评' }}</span>
+            <b class="tiny" style="color: var(--ink-2)">{{ typeLabel(cur.type) }} · {{ typeScore(cur.type) }} 分 · 答对得满分，答一半按 60% 计</b>
+          </template>
+          <template v-else>
+            <span class="tag" :class="isRight ? 'green' : 'red'">{{ isRight ? '答对了' : '答错了' }}</span>
+            <b v-if="!isRight">正确答案：{{ cur.answer.join('、') || '（见解析）' }}</b>
+          </template>
         </div>
+
+        <!-- 主观题参考答案：分点列出，便于逐条对照自评 -->
+        <div v-if="isSubjective" style="margin-bottom: 10px">
+          <div class="tiny" style="color: var(--ink-3); margin-bottom: 3px">参考答案</div>
+          <div class="tiny" style="background: var(--green-weak); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.9">{{ (cur.answer || []).join('\n') }}</div>
+        </div>
+
         <div v-if="cur.analysis" class="muted" style="white-space: pre-wrap">解析：{{ cur.analysis }}</div>
-        <div v-if="!isRight" class="row wrap" style="margin-top: 10px; gap: 6px">
+
+        <div v-if="isSubjective && !selfPick" class="row wrap" style="margin-top: 12px; gap: 8px">
+          <span class="tiny" style="width: 100%; color: var(--ink-2)">对照参考答案，你答到了几成？</span>
+          <button
+            v-for="e in SELF_EVAL"
+            :key="e.key"
+            class="btn sm ghost"
+            @click="gradeSelf(e.key)"
+          >{{ e.label }}</button>
+        </div>
+
+        <div v-if="!isSubjective && !isRight" class="row wrap" style="margin-top: 10px; gap: 6px">
           <span class="tiny">错因（可选）：</span>
           <button class="btn ghost sm" @click="addReason(cur.id, '粗心')">粗心</button>
           <button class="btn ghost sm" @click="addReason(cur.id, '不会')">不会</button>
@@ -460,8 +524,8 @@ const modeNames = { order: '顺序练习', random: '随机练习', chapter: '章
         </div>
       </div>
 
-      <button v-if="!session.revealed" class="btn block" :disabled="!curChosen.length && cur.type !== 'essay' && cur.type !== 'fill'" @click="submit">
-        提交答案
+      <button v-if="!session.revealed" class="btn block" :disabled="!isSubjective && !curChosen.length" @click="submit">
+        {{ isSubjective ? '提交并看参考答案' : '提交答案' }}
       </button>
 
       <!-- 记忆复习：评分三键（按钮上直接显示下次复习时间） -->

@@ -2,8 +2,9 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import db, { uid, now } from '../db'
-import { isCorrect, isKeyQuestion } from '../importers'
-import { enrollCard } from '../srs'
+import { isCorrect, isKeyQuestion, needsSelfEval } from '../importers'
+import { typeLabel, typeHint, typeScore, PAPER_TEMPLATE, SELF_EVAL, evalRatio } from '../questiontypes'
+import { enrollCard, rateCard } from '../srs'
 import { scheduleSync } from '../sync'
 import Icon from '../components/Icon.vue'
 
@@ -13,10 +14,15 @@ const router = useRouter()
 const banks = ref([])
 const bankId = ref('')
 const customCount = ref(10)
-const timeLimit = ref(30) // 分钟
+const timeLimit = ref(150) // 分钟
 const chapters = ref([])
 const chapterFilter = ref('')
 const keyOnly = ref(false)
+// 组卷方式：按真题卷结构（默认）或自定义题量
+const paperMode = ref('template')
+// 主观题自评：qid → 'hit' | 'half' | 'miss'
+const selfEval = ref({})
+const evalAttemptId = new Map() // qid → attempts.id，改档时更新同一条记录
 
 // 考试会话
 const exam = ref(null) // { paperId, questions, answers, flags, deadlineAt }
@@ -103,14 +109,43 @@ async function onBankChange() {
   chapters.value = [...new Set(qs.map((q) => q.chapter).filter(Boolean))]
 }
 
+function shuffle(arr) {
+  return [...arr].sort(() => Math.random() - 0.5)
+}
+
+/* 按真题卷结构取题：单选→多选→名词解释→简答→论述，逐类按题量抽。
+   某类题不够时不静默少给，而是把缺口告诉考生，避免以为考了 100 分实际只有 60 分。 */
+function pickByTemplate(qs) {
+  const byType = {}
+  for (const q of qs) (byType[q.type] || (byType[q.type] = [])).push(q)
+  const picked = []
+  const gaps = []
+  for (const sec of PAPER_TEMPLATE.sections) {
+    const pool = byType[sec.type] || []
+    const n = Math.min(sec.count, pool.length)
+    if (!n) gaps.push(`${typeLabel(sec.type)}：题库中没有`)
+    else if (n < sec.count) gaps.push(`${typeLabel(sec.type)}：缺 ${sec.count - n} 题`)
+    picked.push(...shuffle(pool).slice(0, n))
+  }
+  return { picked, gaps }
+}
+
 async function startExam() {
   let qs = await db.questions.where('bankId').equals(bankId.value).sortBy('seq')
   if (keyOnly.value) qs = qs.filter((q) => isKeyQuestion(q))
   if (chapterFilter.value) qs = qs.filter((q) => q.chapter === chapterFilter.value)
   if (!qs.length) return alert(keyOnly.value ? '没有符合条件的重点题' : '没有符合条件的题目')
-  // 抽题：不足数量全取，否则随机抽
-  const n = Math.min(customCount.value, qs.length)
-  const picked = qs.length <= customCount.value ? qs : [...qs].sort(() => Math.random() - 0.5).slice(0, n)
+
+  let picked
+  if (paperMode.value === 'template') {
+    const r = pickByTemplate(qs)
+    if (!r.picked.length) return alert('题库里没有可用于组卷的题目')
+    if (r.gaps.length && !confirm(`按真题结构组卷时缺题：\n${r.gaps.join('\n')}\n\n仍然开始考试吗？`)) return
+    picked = r.picked
+  } else {
+    const n = Math.min(customCount.value, qs.length)
+    picked = qs.length <= customCount.value ? qs : shuffle(qs).slice(0, n)
+  }
 
   const paperId = uid()
   await db.papers.put({
@@ -133,6 +168,8 @@ async function startExam() {
     deadlineAt: now() + timeLimit.value * 60 * 1000,
   }
   submitted.value = false
+  selfEval.value = {}
+  evalAttemptId.clear()
   clearDraft()
   startTick()
 }
@@ -224,11 +261,21 @@ async function finish() {
   clearInterval(tick.value)
   const e = exam.value
   let right = 0
+  let objTotal = 0
+  let subjTotal = 0
   const perChapter = {}
   const wrongQids = []
+
   for (const q of e.questions) {
+    // 主观题交卷时判不了分：不计入客观题正确率，也不进错题本，
+    // 交卷后在报告页逐题对照参考答案自评，自评结果才决定要不要进记忆队列
+    if (needsSelfEval(q)) {
+      subjTotal++
+      continue
+    }
+    objTotal++
     let chosen = e.answers[q.id] || []
-    if (q.type === 'fill' || q.type === 'essay') chosen = [(e.typed[q.id] || '').trim()]
+    if (q.type === 'fill') chosen = [(e.typed[q.id] || '').trim()]
     const ok = isCorrect(q, chosen)
     if (ok) right++
     else wrongQids.push(q.id)
@@ -250,7 +297,8 @@ async function finish() {
       await enrollCard(q.id, { lapsed: true })
     }
   }
-  const total = e.questions.length
+
+  const total = objTotal
   const result = {
     id: uid(),
     paperId: e.paperId,
@@ -259,6 +307,10 @@ async function finish() {
     right,
     wrong: total - right,
     rate: total ? Math.round((right / total) * 100) : 0,
+    subjectiveTotal: subjTotal,
+    selfEval: {},
+    // 主观题的作答原文留着，报告页自评时要跟参考答案对着看
+    typed: { ...e.typed },
     durationSec: Math.min(e.timeLimitMin * 60, Math.max(0, Math.round((Date.now() - e.startedAt) / 1000))),
     perChapter,
     wrongQids,
@@ -292,7 +344,83 @@ async function viewReport(r) {
   reportQs.value = paper
     ? (await Promise.all(paper.questionIds.map((id) => db.questions.get(id)))).filter(Boolean)
     : []
+  // 恢复已保存的自评结果（历史报告点开时也能看到上次是怎么评的）
+  selfEval.value = { ...(r.selfEval || {}) }
+  evalAttemptId.clear()
   showReport.value = true
+  recomputeScore()
+}
+
+/* 报告里的主观题：交卷时判不了分，需要考生对照参考答案自评 */
+const subjList = computed(() => reportQs.value.filter((q) => needsSelfEval(q)))
+const evalDone = computed(() => subjList.value.filter((q) => selfEval.value[q.id]).length)
+
+/* 得分按题型的真实分值累加：客观题看对错，主观题看自评档位。
+   百分制只在卷面题量与真题一致时才有意义，所以同时给出满分供参考。 */
+function recomputeScore(persist = false) {
+  const r = report.value
+  if (!r) return
+  const wrongSet = new Set(r.wrongQids || [])
+  let got = 0
+  let max = 0
+  for (const q of reportQs.value) {
+    const sc = typeScore(q.type)
+    max += sc
+    if (needsSelfEval(q)) got += sc * evalRatio(selfEval.value[q.id])
+    else if (!wrongSet.has(q.id)) got += sc
+  }
+  r.score = Math.round(got * 10) / 10
+  r.scoreMax = max
+  if (persist) {
+    db.results.update(r.id, { score: r.score, scoreMax: max, selfEval: { ...selfEval.value } })
+      .catch(() => { /* 报告页只读展示，落盘失败不影响当前视图 */ })
+  }
+}
+
+/* 自评允许改档：考生看完参考答案常会发现点错了。
+   改档要同步三处，否则分数、错题本、复习排期会互相打架：
+   作答记录（同一题只留一行，改 correct）、错题本（该进就进、该出就出）、记忆卡评分。 */
+async function applyEval(q, key) {
+  if (selfEval.value[q.id] === key) return
+  const prev = selfEval.value[q.id]
+  selfEval.value = { ...selfEval.value, [q.id]: key }
+  recomputeScore(true)
+
+  const ok = key === 'hit'
+  const typed = (report.value?.typed?.[q.id] || '').trim()
+  const attemptId = evalAttemptId.get(q.id)
+  if (attemptId) {
+    await db.attempts.update(attemptId, { correct: ok })
+  } else {
+    const aid = uid()
+    evalAttemptId.set(q.id, aid)
+    await db.attempts.put({
+      id: aid, questionId: q.id, bankId: q.bankId, mode: 'exam',
+      chosen: [typed], correct: ok, at: now(),
+    })
+  }
+
+  const exist = await db.wrongItems.where('questionId').equals(q.id).first()
+  if (ok) {
+    // 改判为答对：从错题本撤掉，别让已经掌握了的题继续占位
+    if (exist) await db.wrongItems.delete(exist.id)
+    await rateCard(q.id, 'good')
+  } else {
+    if (exist) {
+      await db.wrongItems.update(exist.id, {
+        wrongCount: (exist.wrongCount || 1) + (prev ? 0 : 1),
+        status: 'active', rightStreak: 0, updatedAt: now(),
+      })
+    } else {
+      await db.wrongItems.put({
+        id: uid(), questionId: q.id, wrongReasons: [], wrongCount: 1,
+        rightStreak: 0, status: 'active', updatedAt: now(),
+      })
+    }
+    await enrollCard(q.id, { lapsed: true })
+    await rateCard(q.id, key === 'half' ? 'hard' : 'again')
+  }
+  scheduleSync(8000)
 }
 
 const chapterRows = computed(() => {
@@ -337,12 +465,14 @@ onUnmounted(() => {
 
       <div class="grid3" style="margin-bottom: 16px">
         <div class="card" style="text-align: center; padding: 24px">
-          <div class="bignum" :style="{ color: report.rate >= 60 ? 'var(--green)' : 'var(--red)' }">{{ report.rate }}%</div>
-          <div class="muted" style="margin-top: 6px">正确率</div>
+          <div class="bignum" :style="{ color: (report.score / (report.scoreMax || 1)) >= 0.6 ? 'var(--green)' : 'var(--red)' }">
+            {{ report.score ?? '—' }}<span style="font-size: 18px; color: var(--ink-3)">/{{ report.scoreMax }}</span>
+          </div>
+          <div class="muted" style="margin-top: 6px">得分（客观 + 主观自评）</div>
         </div>
         <div class="card" style="text-align: center; padding: 24px">
-          <div class="bignum">{{ report.right }}<span style="font-size: 18px; color: var(--ink-3)">/{{ report.total }}</span></div>
-          <div class="muted" style="margin-top: 6px">答对题数</div>
+          <div class="bignum">{{ report.rate }}<span style="font-size: 18px; color: var(--ink-3)">%</span></div>
+          <div class="muted" style="margin-top: 6px">客观题正确率 {{ report.right }}/{{ report.total }}</div>
         </div>
         <div class="card" style="text-align: center; padding: 24px">
           <div class="bignum" style="color: var(--amber)">{{ Math.floor(report.durationSec / 60) }}<span style="font-size: 18px">分</span></div>
@@ -355,6 +485,51 @@ onUnmounted(() => {
         <b :style="{ color: avgCompare.delta >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }">
           {{ avgCompare.delta >= 0 ? '+' : '' }}{{ avgCompare.delta }}%
         </b>
+      </div>
+
+      <!-- 主观题自评：系统判不了主观题的表述，只能由考生对照参考答案确认 -->
+      <div v-if="subjList.length" class="card" style="margin-bottom: 16px">
+        <div class="row between wrap" style="gap: 10px; margin-bottom: 4px">
+          <h3 style="font-size: 15px; font-weight: 700">主观题自评</h3>
+          <span class="tag" :class="evalDone === subjList.length ? 'green' : 'red'">
+            已评 {{ evalDone }} / {{ subjList.length }}
+          </span>
+        </div>
+        <div class="tiny" style="margin-bottom: 12px; color: var(--ink-3); line-height: 1.7">
+          名词解释、简答、论述没有唯一表述，无法自动判分。请对照参考答案给自己定档，
+          选「答了一半」按 60% 计分，只有「答对了」才算掌握、不进错题本。
+        </div>
+
+        <div v-for="(q, i) in subjList" :key="q.id" style="padding: 14px 0" :style="i ? { borderTop: '1px solid var(--line)' } : {}">
+          <div class="row between" style="margin-bottom: 6px; gap: 8px">
+            <span class="tag">{{ typeLabel(q.type) }} · {{ typeScore(q.type) }} 分</span>
+            <span v-if="selfEval[q.id]" class="tag green">
+              {{ SELF_EVAL.find((x) => x.key === selfEval[q.id])?.label }}
+            </span>
+          </div>
+          <div style="font-size: 15px; font-weight: 600; white-space: pre-wrap; margin-bottom: 10px">{{ q.stem }}</div>
+
+          <div v-if="report.typed && report.typed[q.id]" style="margin-bottom: 10px">
+            <div class="tiny" style="color: var(--ink-3); margin-bottom: 3px">我的作答</div>
+            <div class="tiny" style="background: var(--bg); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.8">{{ report.typed[q.id] }}</div>
+          </div>
+          <div>
+            <div class="tiny" style="color: var(--ink-3); margin-bottom: 3px">参考答案</div>
+            <div class="tiny" style="background: var(--green-weak); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.8">{{ (q.answer || []).join('\n') }}</div>
+          </div>
+          <div v-if="q.analysis" class="tiny" style="margin-top: 8px; color: var(--ink-2); line-height: 1.7">{{ q.analysis }}</div>
+
+          <div class="row wrap" style="gap: 8px; margin-top: 10px">
+            <button
+              v-for="e in SELF_EVAL"
+              :key="e.key"
+              class="btn sm"
+              :class="selfEval[q.id] === e.key ? '' : 'ghost'"
+              :style="selfEval[q.id] === e.key ? { background: e.key === 'hit' ? 'var(--green)' : e.key === 'half' ? 'var(--amber)' : 'var(--red)' } : {}"
+              @click="applyEval(q, e.key)"
+            >{{ e.label }}</button>
+          </div>
+        </div>
       </div>
 
       <div class="card" style="margin-bottom: 16px">
@@ -405,7 +580,7 @@ onUnmounted(() => {
             <button class="btn ghost sm" @click="exam.flags[cur.id] = !exam.flags[cur.id]">
               {{ exam.flags[cur.id] ? '★ 已标记' : '☆ 标记存疑' }}
             </button>
-            <span class="tag">{{ { single: '单选', multi: '多选', judge: '判断', fill: '填空', essay: '简答' }[cur.type] }}</span>
+            <span class="tag">{{ typeLabel(cur.type) }}</span>
           </div>
         </div>
         <div style="font-size: 16px; font-weight: 600; white-space: pre-wrap">{{ exam.idx + 1 }}. {{ cur.stem }}</div>
@@ -425,7 +600,15 @@ onUnmounted(() => {
         </button>
       </div>
       <div v-else style="margin-bottom: 16px">
-        <textarea class="input" rows="4" v-model="exam.typed[cur.id]" placeholder="输入答案"></textarea>
+        <textarea
+          class="input"
+          :rows="needsSelfEval(cur) ? (cur.type === 'term' ? 4 : 6) : 3"
+          v-model="exam.typed[cur.id]"
+          :placeholder="typeHint(cur.type)"
+        ></textarea>
+        <div v-if="needsSelfEval(cur)" class="tiny" style="margin-top: 6px; color: var(--ink-3)">
+          {{ cur.type === 'term' ? '3 分题' : typeScore(cur.type) + ' 分题' }} · 交卷后对照参考答案自评
+        </div>
       </div>
 
       <div class="row between">
@@ -520,8 +703,28 @@ onUnmounted(() => {
           </select>
         </label>
 
+        <div class="field">
+          <span class="lab">组卷方式</span>
+          <div class="row" style="gap: 8px">
+            <button
+              class="btn sm"
+              :class="paperMode === 'template' ? '' : 'ghost'"
+              @click="paperMode = 'template'; timeLimit = 150"
+            >按真题结构</button>
+            <button
+              class="btn sm"
+              :class="paperMode === 'custom' ? '' : 'ghost'"
+              @click="paperMode = 'custom'"
+            >自定义题量</button>
+          </div>
+          <div v-if="paperMode === 'template'" class="tiny" style="margin-top: 8px; color: var(--ink-3); line-height: 1.7">
+            单选 30×1 + 多选 5×2 + 名词解释 5×3 + 简答 5×5 + 论述 2×10 = 100 分。<br />
+            材料题主观性太强，不参与组卷；题库里缺哪类题会在开始前提示。
+          </div>
+        </div>
+
         <div class="grid2">
-          <label class="field">
+          <label v-if="paperMode === 'custom'" class="field">
             <span class="lab">题目数量</span>
             <input class="input" type="number" min="1" v-model.number="customCount" />
           </label>
@@ -543,12 +746,13 @@ onUnmounted(() => {
       <div v-if="reports.length" class="card" style="margin-top: 16px">
         <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 10px">历史成绩</h3>
         <table class="tbl">
-          <thead><tr><th>时间</th><th>成绩</th><th>对/总</th><th>用时</th><th></th></tr></thead>
+          <thead><tr><th>时间</th><th>得分</th><th>客观正确率</th><th>用时</th><th></th></tr></thead>
           <tbody>
             <tr v-for="r in reports" :key="r.id">
               <td class="tiny">{{ new Date(r.at).toLocaleString() }}</td>
-              <td><b :style="{ color: r.rate >= 60 ? 'var(--green)' : 'var(--red)' }">{{ r.rate }}%</b></td>
-              <td>{{ r.right }}/{{ r.total }}</td>
+              <td><b>{{ r.score ?? '—' }}{{ r.scoreMax ? ' / ' + r.scoreMax : '' }}</b></td>
+              <td><b :style="{ color: r.rate >= 60 ? 'var(--green)' : 'var(--red)' }">{{ r.rate }}%</b>
+                <span class="tiny" style="color: var(--ink-3)">（{{ r.right }}/{{ r.total }}）</span></td>
               <td class="tiny">{{ Math.floor(r.durationSec / 60) }}分</td>
               <td><button class="btn ghost sm" @click="viewReport(r)">查看</button></td>
             </tr>

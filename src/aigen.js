@@ -39,15 +39,48 @@ export function extractJsonArray(text) {
   return JSON.parse(t.slice(s, e + 1))
 }
 
+/* ===== 出题口径：对齐江苏省自考行政管理（本科）专业课的卷面结构 =====
+   真实卷面的主观题占比超过一半，分值差异也大（名词 3 分、简答 5 分、论述 10 分）。
+   通用刷题 App 的「单选+判断」出题方式在这里等于练不到重点，所以出题必须按题型配额。 */
+
+export const TYPE_SPEC = [
+  '题型只能是以下五种之一，禁止出判断题、填空题、材料题：',
+  '- single 单选题：4 个选项，answer 为 1 个字母，如 ["B"]',
+  '- multi 多选题：4 或 5 个选项，answer 为 2 个以上字母，如 ["A","C","D"]（错选、多选、少选均不得分，所以选项之间必须有明确的取舍）',
+  '- term 名词解释：options 留空数组，answer 为 ["一段完整的定义，2-3 句话，含主体、对象、性质"]',
+  '- short 简答题：options 留空数组，answer 为 ["分点作答，写成（1）…（2）…（3）…，只给要点不展开"]',
+  '- essay 论述题：options 留空数组，answer 为 ["先给 3-5 个要点，再说明每个要点要展开什么，能体现论证层次"]',
+]
+
+/* 按总题量分配各题型配额：客观题占一半，主观题占一半，
+   与自考卷「单选 30 题、其余大题 12 题」的比例感保持一致 */
+export function typeQuota(total) {
+  const n = Math.max(4, Number(total) || 8)
+  const single = Math.max(2, Math.round(n * 0.5))
+  const multi = Math.max(1, Math.round(n * 0.15))
+  const term = Math.max(1, Math.round(n * 0.15))
+  const short = Math.max(1, Math.round(n * 0.12))
+  const essay = Math.max(1, n - single - multi - term - short)
+  return { single, multi, term, short, essay }
+}
+
+function quotaLine(total) {
+  const q = typeQuota(total)
+  return `各题型数量：单选 ${q.single} 题、多选 ${q.multi} 题、名词解释 ${q.term} 题、简答 ${q.short} 题、论述 ${q.essay} 题。`
+}
+
 /* 讲义内容 → 题目的用户提示词 */
 export function genQuestionsPrompt(content, { chapter = '', count = 8 } = {}) {
   return [
-    `把下面的讲义内容改编成 ${count} 道考证练习题，输出一个 JSON 数组，不要任何解释文字。`,
+    `把下面的讲义内容改编成 ${count} 道自考练习题，输出一个 JSON 数组，不要任何解释文字。`,
     '要求：',
-    '1. 每题格式：{"type":"single|multi|judge|fill","chapter":"章节名","stem":"题干","options":["A选项","B选项","C选项","D选项"],"answer":["A"],"analysis":"解析：说明考点依据","difficulty":""}',
-    '2. 单选/多选给4个options，answer为字母数组；判断题options留空、answer为["对"]或["错"]；填空题options留空、answer为答案文本数组',
-    '3. 高频考点、常考易错点标 "difficulty":"重点"，普通题该字段留空字符串',
-    '4. 只输出 JSON 数组本身，不要markdown围栏',
+    '1. 每题格式：{"type":"single|multi|term|short|essay","chapter":"章节名","stem":"题干","options":[],"answer":[""],"analysis":"解析：说明考点依据","difficulty":""}',
+    ...TYPE_SPEC,
+    `2. ${quotaLine(count)}`,
+    '3. 名词解释的 stem 只写被解释的术语本身，不要把定义写进题干',
+    '4. 简答题用「简述……」「说明……的构成要件」这类问法；论述题用「试述……」「论述……的意义」这类问法',
+    '5. 高频考点、常考易错点标 "difficulty":"重点"，普通题该字段留空字符串',
+    '6. 只输出 JSON 数组本身，不要 markdown 围栏',
     '',
     chapter ? `章节标题：${chapter}` : '',
     '讲义内容：',
@@ -98,19 +131,21 @@ export async function genCardsRaw(content, opts = {}) {
 /* 弱项出卷：薄弱章节 + 近期错题 → 题目数组 */
 export async function genWeakQuestions({ weakChapters = [], wrongStems = [], count = 8 } = {}) {
   const lines = [
-    '一位考生最近的薄弱点如下：',
+    '一位考生最近在准备江苏省自考行政管理（本科）的专业课考试，薄弱点如下：',
     weakChapters.length ? `薄弱章节（正确率从低到高）：${weakChapters.map((c) => `${c.chapter}（${c.rate}%）`).join('、')}` : '',
     wrongStems.length ? `近期错题涉及的知识点：\n${wrongStems.map((s, i) => `${i + 1}. ${s.slice(0, 80)}`).join('\n')}` : '',
     '',
-    `请针对这些薄弱点改编出 ${count} 道练习题，输出一个 JSON 数组，不要任何解释文字。`,
+    `请针对这些薄弱点出 ${count} 道练习题，输出一个 JSON 数组，不要任何解释文字。`,
     '要求：',
-    '1. 每题格式：{"type":"single|multi|judge","chapter":"对应薄弱章节名","stem":"题干","options":["A","B","C","D"],"answer":["A"],"analysis":"解析：说明考点","difficulty":"重点"}',
-    '2. 单选/多选4个options，answer为字母数组；判断题options留空、answer为["对"]或["错"]',
-    '3. difficulty 全部标 "重点"',
-    '4. 只输出 JSON 数组本身',
+    '1. 每题格式：{"type":"single|multi|term|short|essay","chapter":"对应薄弱章节名","stem":"题干","options":[],"answer":[""],"analysis":"解析：说明考点","difficulty":"重点"}',
+    ...TYPE_SPEC,
+    `2. ${quotaLine(count)}`,
+    '3. 名词解释的 stem 只写被解释的术语本身',
+    '4. difficulty 全部标 "重点"',
+    '5. 只输出 JSON 数组本身',
   ].filter(Boolean)
   const text = await chatOnce([
-    { role: 'system', content: '你是严谨的考证出题专家，永远只输出合法 JSON。' },
+    { role: 'system', content: '你是严谨的自考命题专家，熟悉江苏省行政管理专业本科段的题型结构与评分标准，永远只输出合法 JSON。' },
     { role: 'user', content: lines.join('\n') },
   ])
   const arr = extractJsonArray(text)

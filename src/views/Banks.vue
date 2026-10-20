@@ -8,6 +8,7 @@ import { aiReady } from '../ai'
 import { aiStore, startPdfTask } from '../aistore'
 import { saveTextFile } from '../savefile'
 import Icon from '../components/Icon.vue'
+import { typeLabel } from '../questiontypes'
 import ExportNotice from '../components/ExportNotice.vue'
 
 const banks = ref([])
@@ -284,7 +285,7 @@ function cancelPdf() {
           <tr v-for="(q, i) in preview.questions.slice(0, 5)" :key="i">
             <td>{{ i + 1 }}</td>
             <td>{{ q.stem.slice(0, 60) }}{{ q.stem.length > 60 ? '…' : '' }}</td>
-            <td>{{ { single: '单选', multi: '多选', judge: '判断', fill: '填空', essay: '简答' }[q.type] }}</td>
+            <td>{{ typeLabel(q.type) }}</td>
             <td>{{ q.answer.join(',') }}</td>
           </tr>
         </tbody>

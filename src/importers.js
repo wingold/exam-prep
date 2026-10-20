@@ -3,20 +3,30 @@
    { type: single|multi|judge|fill|essay, stem, options[], answer[], analysis, chapter, difficulty }
    Word(.docx) 由调用方先用 mammoth 提取纯文本，再走 parseText */
 
+import { isObjective } from './questiontypes.js'
+
 const TYPE_MAP = {
-  单选: 'single', 单选题: 'single', 单项选择: 'single',
-  多选: 'multi', 多选题: 'multi', 多项选择: 'multi',
+  单选: 'single', 单选题: 'single', 单项选择: 'single', 单项选择题: 'single',
+  多选: 'multi', 多选题: 'multi', 多项选择: 'multi', 多项选择题: 'multi',
   判断: 'judge', 判断题: 'judge',
   填空: 'fill', 填空题: 'fill',
-  简答: 'essay', 简答题: 'essay', 问答: 'essay',
+  名词解释: 'term', 名词解释题: 'term', 概念题: 'term', 术语解释: 'term',
+  简答: 'short', 简答题: 'short', 问答: 'short', 问答题: 'short',
+  论述: 'essay', 论述题: 'essay', 试述: 'essay', 分析题: 'essay',
+  材料: 'material', 材料题: 'material', 案例分析: 'material', 案例分析题: 'material',
 }
+
+const KNOWN_TYPES = ['single', 'multi', 'judge', 'fill', 'term', 'short', 'essay', 'material']
 
 export function normType(t) {
   if (!t) return 'single'
   const s = String(t).trim()
   if (TYPE_MAP[s]) return TYPE_MAP[s]
   const low = s.toLowerCase()
-  if (['single', 'multi', 'judge', 'fill', 'essay'].includes(low)) return low
+  if (KNOWN_TYPES.includes(low)) return low
+  // 「简答题（5分）」这类带后缀的写法
+  const hit = Object.keys(TYPE_MAP).find((k) => s.startsWith(k))
+  if (hit) return TYPE_MAP[hit]
   return 'single'
 }
 
@@ -227,7 +237,8 @@ function normalize(q) {
     answer = answer.map((a) => a.toUpperCase())
     // 选项存在时把 "A" 形式保留为字母（判定时按索引比对）
   }
-  if (type === 'fill' || type === 'essay') {
+  if (type === 'fill' || type === 'term' || type === 'short' || type === 'essay' || type === 'material') {
+    // 主观题的参考答案可能整段写在 answerRaw 里，按段落/分号拆成要点
     answer = answer.length ? answer : String(q.answerRaw ?? '').split(/[/；;]/).filter(Boolean)
   }
 
@@ -256,9 +267,17 @@ export function isKeyQuestion(q) {
 
 /* ========== 答题判定 ========== */
 
+/* 主观题（名词解释/简答/论述/材料）不能自动判分：
+   考生的表述和标准答案不可能字面相同，用字符串包含比对等于把每道主观题都判错，
+   连带把这些题全部塞进错题本和记忆队列。这类题改由考生自评（见 SELF_EVAL）。 */
+export function needsSelfEval(q) {
+  return !isObjective(q?.type)
+}
+
 export function isCorrect(q, chosen) {
+  if (needsSelfEval(q)) return false
   if (!chosen || !chosen.length) return false
-  if (q.type === 'fill' || q.type === 'essay') {
+  if (q.type === 'fill') {
     const a = (q.answer[0] || '').trim().toLowerCase()
     const c = (chosen[0] || '').trim().toLowerCase()
     if (!a || !c) return false

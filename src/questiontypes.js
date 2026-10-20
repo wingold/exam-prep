@@ -34,34 +34,71 @@ export const SELF_EVAL = [
 export const evalRatio = (key) => SELF_EVAL.find((x) => x.key === key)?.ratio ?? 0
 export const evalRating = (key) => SELF_EVAL.find((x) => x.key === key)?.rating ?? 'again'
 
-/* ===== 真题卷结构 =====
-   依据：00261 行政法学 2020年8月、2021年4月两套真题的卷面（答案及评分参考原文）
-     一、单选 30×1 = 30
-     二、多选  5×2 = 10
-     三、名词解释 5×3 = 15
-     四、简答  3×5 = 15
-     五、论述  1×10 = 10
-     六、案例分析 2×10 = 20
-   非选择题只有「3 道简答 + 1 道论述」，不是 5+2 —— 按 5+2 组卷会多出 20 分，
-   分数看着是百分制其实是假的（早先按 5 简答 + 2 论述 设过，已纠正）。
-   材料题（案例分析）主观性太强，AI 出不好也判不了，故不参与组卷：
-   组卷满分因此是 80 分，界面上要同步显示满分，不能让人以为是 100 分。 */
-export const PAPER_TEMPLATE = {
-  id: 'zikao',
-  name: '自考标准卷（不含材料题）',
-  sections: [
-    { type: 'single', count: 30, score: 1 },
-    { type: 'multi', count: 5, score: 2 },
-    { type: 'term', count: 5, score: 3 },
-    { type: 'short', count: 3, score: 5 },
-    { type: 'essay', count: 1, score: 10 },
-  ],
+/* ===== 真题卷结构：一科一套，不能混用 =====
+   依据是各科官方评分参考原文，不是「大概按百分制凑」：
+   - 00261 行政法学（2020/8、2021/4 两套核对过）：单选 30、多选 5、名词 5、
+     简答 3、论述 1，另有案例分析 2×10。
+   - 01680 城市管理学（精讲一刊载的题型表）：单选 20、多选 10、简答 5、
+     论述 2，另有案例题 1×15。**这一科没有名词解释**。
+   材料题／案例题主观性太强，AI 出不好也判不了，统一不进组卷，
+   所以两套模板的组卷满分都是 80，界面必须显示满分而不是想当然的 100。 */
+export const TEMPLATES = [
+  {
+    id: '00261',
+    name: '自考行政法学卷（00261）',
+    subjects: ['行政法学', '00261'],
+    note: '材料题（案例分析 2×10 = 20 分）不参与组卷，组卷满分 80',
+    sections: [
+      { type: 'single', count: 30, score: 1 },
+      { type: 'multi', count: 5, score: 2 },
+      { type: 'term', count: 5, score: 3 },
+      { type: 'short', count: 3, score: 5 },
+      { type: 'essay', count: 1, score: 10 },
+    ],
+  },
+  {
+    id: '01680',
+    name: '城市管理学报（01680）',
+    subjects: ['城市管理学', '01680'],
+    note: '本科没有名词解释；案例题（1×15 = 15 分）不参与组卷，组卷满分 85',
+    sections: [
+      { type: 'single', count: 20, score: 1 },
+      { type: 'multi', count: 10, score: 2 },
+      { type: 'short', count: 5, score: 5 },
+      { type: 'essay', count: 2, score: 10 },
+    ],
+  },
+]
+
+export const DEFAULT_TEMPLATE_ID = TEMPLATES[0].id
+
+export function templateById(id) {
+  return TEMPLATES.find((t) => t.id === id) || TEMPLATES[0]
 }
 
-/* 组卷满分（不含材料题的 20 分） */
-export const TEMPLATE_TOTAL = PAPER_TEMPLATE.sections.reduce((s, x) => s + x.count * x.score, 0)
+/* 组卷满分（不含材料／案例题） */
+export function templateTotal(t) {
+  return (t || TEMPLATES[0]).sections.reduce((s, x) => s + x.count * x.score, 0)
+}
+
+/* 按科目名/课程代码猜模板：题库归属科目或题库名里带「城市管理学」「01680」都算命中。
+   猜不到返回 null，由界面保留上一次的选择，不要瞎套一套结构给考生。 */
+export function templateForSubject(...hints) {
+  const text = hints
+    .filter(Boolean)
+    .map((s) => String(s))
+    .join(' ')
+  if (!text.trim()) return null
+  return (
+    TEMPLATES.find((t) => t.subjects.some((k) => text.includes(k))) || null
+  )
+}
 
 /* 组卷缺题型时给出人话提示，而不是静默少题 */
-export function describeTemplate() {
-  return PAPER_TEMPLATE.sections.map((s) => `${typeLabel(s.type)} ${s.count} 题×${s.score} 分`).join('、')
+export function describeTemplate(t = TEMPLATES[0]) {
+  return t.sections.map((s) => `${typeLabel(s.type)} ${s.count} 题×${s.score} 分`).join('、')
 }
+
+/* 兼容旧引用：不指定模板时按默认（行政法学）算 */
+export const PAPER_TEMPLATE = TEMPLATES[0]
+export const TEMPLATE_TOTAL = templateTotal(PAPER_TEMPLATE)

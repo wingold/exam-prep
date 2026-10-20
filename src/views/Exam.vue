@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion, needsSelfEval } from '../importers'
-import { typeLabel, typeHint, typeScore, PAPER_TEMPLATE, TEMPLATE_TOTAL, SELF_EVAL, evalRatio } from '../questiontypes'
+import { typeLabel, typeHint, typeScore, TEMPLATES, DEFAULT_TEMPLATE_ID, templateById, templateTotal, templateForSubject, SELF_EVAL, evalRatio } from '../questiontypes'
 import { enrollCard, rateCard } from '../srs'
 import { scheduleSync } from '../sync'
 import Icon from '../components/Icon.vue'
@@ -20,6 +20,14 @@ const chapterFilter = ref('')
 const keyOnly = ref(false)
 // 组卷方式：按真题卷结构（默认）或自定义题量
 const paperMode = ref('template')
+// 卷面模板：各科结构不同（有的带名词解释、有的没有），按题库的科目自动匹配，也可手选
+const TEMPLATE_KEY = 'exam_paper_template'
+const templateId = ref(localStorage.getItem(TEMPLATE_KEY) || DEFAULT_TEMPLATE_ID)
+const tmpl = computed(() => templateById(templateId.value))
+function setTemplate(id) {
+  templateId.value = id
+  localStorage.setItem(TEMPLATE_KEY, id)
+}
 // 主观题自评：qid → 'hit' | 'half' | 'miss'
 const selfEval = ref({})
 const evalAttemptId = new Map() // qid → attempts.id，改档时更新同一条记录
@@ -92,7 +100,11 @@ async function detectDraft() {
 
 onMounted(async () => {
   banks.value = await db.banks.orderBy('createdAt').reverse().toArray()
-  if (route.query.bank) bankId.value = route.query.bank
+  if (route.query.bank) {
+    bankId.value = route.query.bank
+    // 从题库页跳过来时也要把卷面模板对上
+    await onBankChange()
+  }
   reports.value = await db.results.orderBy('at').reverse().limit(20).toArray()
   await detectDraft()
   if (route.query.result) {
@@ -107,20 +119,30 @@ async function onBankChange() {
   if (!bankId.value) return
   const qs = await db.questions.where('bankId').equals(bankId.value).toArray()
   chapters.value = [...new Set(qs.map((q) => q.chapter).filter(Boolean))]
+
+  // 按题库的科目 / 题库名猜卷面结构；猜不到就沿用上一次的选择
+  const bank = await db.banks.get(bankId.value)
+  let subjectName = ''
+  if (bank?.subjectId) {
+    const s = await db.subjects.get(bank.subjectId)
+    subjectName = s?.name || ''
+  }
+  const matched = templateForSubject(subjectName, bank?.name)
+  if (matched) setTemplate(matched.id)
 }
 
 function shuffle(arr) {
   return [...arr].sort(() => Math.random() - 0.5)
 }
 
-/* 按真题卷结构取题：单选→多选→名词解释→简答→论述，逐类按题量抽。
+/* 按所选卷面模板取题：逐类按题量抽。
    某类题不够时不静默少给，而是把缺口告诉考生，避免以为考了 100 分实际只有 60 分。 */
 function pickByTemplate(qs) {
   const byType = {}
   for (const q of qs) (byType[q.type] || (byType[q.type] = [])).push(q)
   const picked = []
   const gaps = []
-  for (const sec of PAPER_TEMPLATE.sections) {
+  for (const sec of tmpl.value.sections) {
     const pool = byType[sec.type] || []
     const n = Math.min(sec.count, pool.length)
     if (!n) gaps.push(`${typeLabel(sec.type)}：题库中没有`)
@@ -140,7 +162,7 @@ async function startExam() {
   if (paperMode.value === 'template') {
     const r = pickByTemplate(qs)
     if (!r.picked.length) return alert('题库里没有可用于组卷的题目')
-    if (r.gaps.length && !confirm(`按真题结构组卷时缺题：\n${r.gaps.join('\n')}\n\n仍然开始考试吗？`)) return
+    if (r.gaps.length && !confirm(`按「${tmpl.value.name}」组卷时缺题：\n${r.gaps.join('\n')}\n\n仍然开始考试吗？`)) return
     picked = r.picked
   } else {
     const n = Math.min(customCount.value, qs.length)
@@ -717,9 +739,18 @@ onUnmounted(() => {
               @click="paperMode = 'custom'"
             >自定义题量</button>
           </div>
-          <div v-if="paperMode === 'template'" class="tiny" style="margin-top: 8px; color: var(--ink-3); line-height: 1.7">
-            单选 30×1 + 多选 5×2 + 名词解释 5×3 + 简答 3×5 + 论述 1×10 = {{ TEMPLATE_TOTAL }} 分。<br />
-            材料题主观性太强，不参与组卷（真题里是 2×10 = 20 分，故卷面满分是 80）；题库里缺哪类题会在开始前提示。
+          <div v-if="paperMode === 'template'" style="margin-top: 10px">
+            <label class="field">
+              <span class="lab">卷面结构</span>
+              <select class="input" :value="templateId" @change="setTemplate($event.target.value)">
+                <option v-for="t in TEMPLATES" :key="t.id" :value="t.id">{{ t.name }}</option>
+              </select>
+            </label>
+            <div class="tiny" style="margin-top: 8px; color: var(--ink-3); line-height: 1.7">
+              {{ tmpl.sections.map((s) => typeLabel(s.type) + ' ' + s.count + '×' + s.score).join(' + ') }}
+              = {{ templateTotal(tmpl) }} 分。<br />
+              {{ tmpl.note }}；题库里缺哪类题会在开始前提示。
+            </div>
           </div>
         </div>
 

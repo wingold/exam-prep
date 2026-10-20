@@ -35,9 +35,17 @@ export const evalRatio = (key) => SELF_EVAL.find((x) => x.key === key)?.ratio ??
 export const evalRating = (key) => SELF_EVAL.find((x) => x.key === key)?.rating ?? 'again'
 
 /* ===== 真题卷结构 =====
-   江苏省自考行政管理（本科）专业课的卷面构成，去掉材料题（案例分析）后的版本：
-   材料题主观性太强，AI 出不好，也判不了，故不参与组卷。
-   单选 30×1 + 多选 5×2 + 名词 5×3 + 简答 5×5 + 论述 2×10 = 100 分 */
+   依据：00261 行政法学 2020年8月、2021年4月两套真题的卷面（答案及评分参考原文）
+     一、单选 30×1 = 30
+     二、多选  5×2 = 10
+     三、名词解释 5×3 = 15
+     四、简答  3×5 = 15
+     五、论述  1×10 = 10
+     六、案例分析 2×10 = 20
+   非选择题只有「3 道简答 + 1 道论述」，不是 5+2 —— 按 5+2 组卷会多出 20 分，
+   分数看着是百分制其实是假的（早先按 5 简答 + 2 论述 设过，已纠正）。
+   材料题（案例分析）主观性太强，AI 出不好也判不了，故不参与组卷：
+   组卷满分因此是 80 分，界面上要同步显示满分，不能让人以为是 100 分。 */
 export const PAPER_TEMPLATE = {
   id: 'zikao',
   name: '自考标准卷（不含材料题）',
@@ -45,11 +53,12 @@ export const PAPER_TEMPLATE = {
     { type: 'single', count: 30, score: 1 },
     { type: 'multi', count: 5, score: 2 },
     { type: 'term', count: 5, score: 3 },
-    { type: 'short', count: 5, score: 5 },
-    { type: 'essay', count: 2, score: 10 },
+    { type: 'short', count: 3, score: 5 },
+    { type: 'essay', count: 1, score: 10 },
   ],
 }
 
+/* 组卷满分（不含材料题的 20 分） */
 export const TEMPLATE_TOTAL = PAPER_TEMPLATE.sections.reduce((s, x) => s + x.count * x.score, 0)
 
 /* 组卷缺题型时给出人话提示，而不是静默少题 */

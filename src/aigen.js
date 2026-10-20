@@ -52,15 +52,21 @@ export const TYPE_SPEC = [
   '- essay 论述题：options 留空数组，answer 为 ["先给 3-5 个要点，再说明每个要点要展开什么，能体现论证层次"]',
 ]
 
-/* 按总题量分配各题型配额：客观题占一半，主观题占一半，
-   与自考卷「单选 30 题、其余大题 12 题」的比例感保持一致 */
+/* 按总题量分配各题型配额：比例取自真题卷面
+   （单选 30 / 多选 5 / 名词 5 / 简答 3 / 论述 1，共 44 题）。
+   刻意不写成「客观一半、主观一半」：真题的客观题就是 35 题，主观题只有 9 题，
+   按 1:1 出题会练出一堆真考不到的题量结构。 */
+const QUOTA_WEIGHT = { single: 30, multi: 5, term: 5, short: 3, essay: 1 }
+const QUOTA_SUM = 44
+
 export function typeQuota(total) {
-  const n = Math.max(4, Number(total) || 8)
-  const single = Math.max(2, Math.round(n * 0.5))
-  const multi = Math.max(1, Math.round(n * 0.15))
-  const term = Math.max(1, Math.round(n * 0.15))
-  const short = Math.max(1, Math.round(n * 0.12))
-  const essay = Math.max(1, n - single - multi - term - short)
+  const n = Math.max(8, Math.round(Number(total) || 8))
+  const multi = Math.max(1, Math.round((n * QUOTA_WEIGHT.multi) / QUOTA_SUM))
+  const term = Math.max(1, Math.round((n * QUOTA_WEIGHT.term) / QUOTA_SUM))
+  const short = Math.max(1, Math.round((n * QUOTA_WEIGHT.short) / QUOTA_SUM))
+  const essay = Math.max(1, Math.round((n * QUOTA_WEIGHT.essay) / QUOTA_SUM))
+  // 单选兜底吃掉余数，保证五类之和等于 n（AI 少给会直接缺题）
+  const single = Math.max(2, n - multi - term - short - essay)
   return { single, multi, term, short, essay }
 }
 

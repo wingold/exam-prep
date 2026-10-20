@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import db, { uid, now } from '../db'
 import { isCorrect, isKeyQuestion, needsSelfEval } from '../importers'
-import { typeLabel, typeHint, typeScore, PAPER_TEMPLATE, SELF_EVAL, evalRatio } from '../questiontypes'
+import { typeLabel, typeHint, typeScore, PAPER_TEMPLATE, TEMPLATE_TOTAL, SELF_EVAL, evalRatio } from '../questiontypes'
 import { enrollCard, rateCard } from '../srs'
 import { scheduleSync } from '../sync'
 import Icon from '../components/Icon.vue'
@@ -718,8 +718,8 @@ onUnmounted(() => {
             >自定义题量</button>
           </div>
           <div v-if="paperMode === 'template'" class="tiny" style="margin-top: 8px; color: var(--ink-3); line-height: 1.7">
-            单选 30×1 + 多选 5×2 + 名词解释 5×3 + 简答 5×5 + 论述 2×10 = 100 分。<br />
-            材料题主观性太强，不参与组卷；题库里缺哪类题会在开始前提示。
+            单选 30×1 + 多选 5×2 + 名词解释 5×3 + 简答 3×5 + 论述 1×10 = {{ TEMPLATE_TOTAL }} 分。<br />
+            材料题主观性太强，不参与组卷（真题里是 2×10 = 20 分，故卷面满分是 80）；题库里缺哪类题会在开始前提示。
           </div>
         </div>
 

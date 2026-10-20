@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import db, { uid, now } from '../db'
+import db, { uid, now, purge } from '../db'
 import { isCorrect, isKeyQuestion, needsSelfEval } from '../importers'
 import { typeLabel, typeScore, typeHint, SELF_EVAL, evalRating } from '../questiontypes'
 import { enrollCard, rateCard, reconcileWrongBook, isMasteredCard, masteredHint, MASTERED_DAYS, MASTERED_REPS } from '../srs'
@@ -63,7 +63,8 @@ async function reopen(item) {
 
 async function remove(item) {
   if (!confirm('从错题本移除这道题？（做题记录保留）')) return
-  await db.wrongItems.delete(item.w.id)
+  // 走 purge 而不是 delete：要留墓碑，否则下次同步会把云端那份合并回来
+  await purge('wrongItems', [item.w.id])
   await reload()
 }
 

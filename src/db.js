@@ -35,6 +35,13 @@ db.version(5).stores({
   decks: 'id, name, subjectId, createdAt',
 })
 
+/* 删除墓碑：本地删掉的记录要能被同步带到云端。
+   没有它的话，合并（两边取并集）会把远端仍在的旧记录搬回来 ——
+   「删掉的题库同步后又回来了」就是这个原因。 */
+db.version(6).stores({
+  deletions: 'id, table, recordId, at',
+})
+
 export default db
 
 export const uid = () =>
@@ -131,12 +138,27 @@ export async function exportBank(bankId) {
   }
 }
 
+/* ========== 删除（必留墓碑） ==========
+   业务层的删除一律走 purge()，不要直接 db.xxx.delete()：
+   直接删只改本机，云端那份仍在，下次同步就会把它合并回来。 */
+export async function purge(table, ids) {
+  const list = [...new Set((ids || []).filter(Boolean))]
+  if (!list.length) return 0
+  if (!db[table]) throw new Error('purge: 未知数据表 ' + table)
+  await db[table].bulkDelete(list)
+  const at = now()
+  await db.deletions.bulkPut(
+    list.map((recordId) => ({ id: table + ':' + recordId, table, recordId, at }))
+  )
+  return list.length
+}
+
 /* ========== 全量导出 / 导入 ========== */
 
 const TABLES = [
   'certificates', 'subjects', 'sessions', 'registrations', 'scores',
   'banks', 'questions', 'attempts', 'papers', 'results', 'wrongItems', 'cards',
-  'decks', 'noteCards', 'plans', 'meta',
+  'decks', 'noteCards', 'plans', 'meta', 'deletions',
 ]
 
 export async function exportAll() {
@@ -152,5 +174,21 @@ export async function importAll(data, { mode = 'replace' } = {}) {
   }
   for (const t of TABLES) {
     if (Array.isArray(data[t])) await db[t].bulkPut(data[t])
+  }
+  /* merge 模式下 bulkPut 只增不删，被墓碑标记的记录不会自己消失，必须显式删。
+     但「删除之后又被更新过」的记录在合并结果里仍然存在（见 merge.js），
+     不能一概删掉，所以按最终集合 data[t] 里是否还有它来判断。 */
+  if (mode === 'merge' && Array.isArray(data.deletions)) {
+    const byTable = new Map()
+    for (const d of data.deletions) {
+      if (!d || !d.table || !d.recordId || !db[d.table]) continue
+      if (!byTable.has(d.table)) byTable.set(d.table, [])
+      byTable.get(d.table).push(d.recordId)
+    }
+    for (const [t, ids] of byTable) {
+      const kept = new Set((data[t] || []).map((r) => r.id))
+      const gone = ids.filter((id) => !kept.has(id))
+      if (gone.length) await db[t].bulkDelete(gone)
+    }
   }
 }

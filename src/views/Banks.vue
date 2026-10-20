@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import mammoth from 'mammoth/mammoth.browser'
 import * as XLSX from 'xlsx'
-import db, { uid, now, plain, getOrCreateCert, listSubjects, exportBank } from '../db'
+import db, { uid, now, plain, getOrCreateCert, listSubjects, exportBank, purge } from '../db'
 import { parseJson, parseText, parseSheetRows } from '../importers'
 import { aiReady } from '../ai'
 import { aiStore, startPdfTask } from '../aistore'
@@ -119,8 +119,10 @@ function cancelImport() {
 
 async function delBank(b) {
   if (!confirm(`删除题库「${b.name}」及其 ${questionCount.value[b.id] || 0} 道题目？作答记录保留。`)) return
-  await db.questions.where('bankId').equals(b.id).delete()
-  await db.banks.delete(b.id)
+  // 逐条留墓碑：否则同步时云端那份会把题库整套「复活」
+  const qids = await db.questions.where('bankId').equals(b.id).primaryKeys()
+  await purge('questions', qids)
+  await purge('banks', [b.id])
   await reload()
 }
 

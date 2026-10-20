@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import db, { uid, now, getOrCreateCert, listSubjects, listSessions, subjectProgress } from '../db'
+import db, { uid, now, getOrCreateCert, listSubjects, listSessions, subjectProgress, purge } from '../db'
 import { refreshExamCap } from '../srs'
 import Icon from '../components/Icon.vue'
 
@@ -87,9 +87,11 @@ async function saveSubj() {
 
 async function delSubj(s) {
   if (!confirm(`删除科目「${s.name}」及其成绩记录？`)) return
-  await db.subjects.delete(s.id)
-  await db.scores.where('subjectId').equals(s.id).delete()
-  await db.registrations.where('subjectId').equals(s.id).delete()
+  const scoreIds = await db.scores.where('subjectId').equals(s.id).primaryKeys()
+  const regIds = await db.registrations.where('subjectId').equals(s.id).primaryKeys()
+  await purge('subjects', [s.id])
+  await purge('scores', scoreIds)
+  await purge('registrations', regIds)
   await reload()
 }
 
@@ -127,8 +129,9 @@ async function saveSession() {
 
 async function delSession(s) {
   if (!confirm(`删除考期「${s.name}」及报考记录？`)) return
-  await db.sessions.delete(s.id)
-  await db.registrations.where('sessionId').equals(s.id).delete()
+  const regIds = await db.registrations.where('sessionId').equals(s.id).primaryKeys()
+  await purge('sessions', [s.id])
+  await purge('registrations', regIds)
   await reload()
   await refreshExamCap()
 }
@@ -150,7 +153,8 @@ function openReg(session) {
 
 async function saveReg() {
   const sid = regSessionId.value
-  await db.registrations.where('sessionId').equals(sid).delete()
+  const oldRegIds = await db.registrations.where('sessionId').equals(sid).primaryKeys()
+  await purge('registrations', oldRegIds)
   for (const [subjId, on] of Object.entries(regChecked.value)) {
     if (on) {
       await db.registrations.put({ id: uid(), sessionId: sid, subjectId: subjId, updatedAt: now() })

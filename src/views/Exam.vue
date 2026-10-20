@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import db, { uid, now } from '../db'
+import db, { uid, now, purge } from '../db'
 import { isCorrect, isKeyQuestion, needsSelfEval } from '../importers'
 import { typeLabel, typeHint, typeScore, TEMPLATES, DEFAULT_TEMPLATE_ID, templateById, templateTotal, templateForSubject, SELF_EVAL, evalRatio } from '../questiontypes'
 import { enrollCard, rateCard } from '../srs'
@@ -439,7 +439,7 @@ async function applyEval(q, key) {
   const exist = await db.wrongItems.where('questionId').equals(q.id).first()
   if (ok) {
     // 改判为答对：从错题本撤掉，别让已经掌握了的题继续占位
-    if (exist) await db.wrongItems.delete(exist.id)
+    if (exist) await purge('wrongItems', [exist.id])
     await rateCard(q.id, 'good')
   } else {
     if (exist) {

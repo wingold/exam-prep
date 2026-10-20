@@ -1,18 +1,14 @@
 /* WebDAV 同步：经同源/Worker 代理转发（坚果云不返回 CORS 头，浏览器直连必失败）
    代理协议：GET/PUT <proxyBase>?u=<encodeURIComponent(目标URL)>，其余透传
    dev：同源 /dav-sync（vite 中间件）；生产：Cloudflare Worker（见 cloudflare-worker.js）
-   合并策略：记录级 updatedAt last-write-wins */
+   合并策略：记录级 updatedAt last-write-wins，叠加删除墓碑（见 merge.js） */
 
 import { Capacitor, CapacitorHttp } from '@capacitor/core'
 import db, { exportAll, importAll, now } from './db'
+import { mergeEnvelopes, pruneTombstones } from './merge'
 
 const LS_KEY = 'webdav_config'
 const FILE = 'exam-prep-sync.json'
-const TABLES = [
-  'certificates', 'subjects', 'sessions', 'registrations', 'scores',
-  'banks', 'questions', 'attempts', 'papers', 'results', 'wrongItems', 'cards',
-  'decks', 'noteCards', 'plans',
-]
 
 export function getWebdavConfig() {
   try {
@@ -249,24 +245,7 @@ export async function testConnection() {
   }
 }
 
-/* 记录级合并：返回合并后的完整表数据 */
-function mergeTable(localArr, remoteArr) {
-  const map = new Map()
-  for (const r of localArr) map.set(r.id, r)
-  for (const r of remoteArr) {
-    const l = map.get(r.id)
-    if (!l) {
-      map.set(r.id, r)
-      continue
-    }
-    const lt = l.updatedAt || l.at || l.createdAt || 0
-    const rt = r.updatedAt || r.at || r.createdAt || 0
-    if (rt > lt) map.set(r.id, r)
-  }
-  return [...map.values()]
-}
-
-/* 执行同步：下载 → 合并 → 写回本地 → 上传 */
+/* 执行同步：下载 → 合并（含删除墓碑）→ 写回本地 → 上传 */
 let inFlight = false
 export function syncInFlight() { return inFlight }
 
@@ -280,23 +259,31 @@ export async function runSync() {
   inFlight = true
   try {
     const local = await exportAll()
+
+    /* 过期墓碑先清掉：既避免同步文件越传越大，也避免久远的删除标记继续影响合并 */
+    const allDel = local.deletions || []
+    const liveDel = pruneTombstones(allDel)
+    if (liveDel.length !== allDel.length) {
+      const liveIds = new Set(liveDel.map((d) => d.id))
+      const staleIds = allDel.filter((d) => !liveIds.has(d.id)).map((d) => d.id)
+      local.deletions = liveDel
+      if (staleIds.length) await db.deletions.bulkDelete(staleIds)
+    }
+
     const remote = await fetchRemote(c)
 
     let merged = local
     let action = '上传'
 
     if (remote && remote.version === 1) {
-      merged = { ...local, version: 1, exportedAt: new Date().toISOString() }
-      let changed = 0
-      for (const t of TABLES) {
-        const before = new Map((local[t] || []).map((r) => [r.id, r]))
-        const m = mergeTable(local[t] || [], remote[t] || [])
-        merged[t] = m
-        for (const r of m) if (!before.has(r.id)) changed++
-      }
-      action = changed ? `拉取合并（+${changed} 条新记录）` : '已是最新'
+      const r = mergeEnvelopes(local, remote)
+      merged = r.merged
+      const bits = []
+      if (r.added) bits.push(`+${r.added} 条`)
+      if (r.removed) bits.push(`-${r.removed} 条`)
+      action = bits.length ? `同步（${bits.join(' / ')}）` : '已是最新'
 
-      if (changed) {
+      if (r.added || r.removed) {
         await importAll(merged, { mode: 'merge' })
       }
     }

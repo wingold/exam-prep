@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node scripts/verify-srs.mjs && node scripts/verify-bank-roundtrip.mjs",
+    "test": "node scripts/verify-srs.mjs && node scripts/verify-bank-roundtrip.mjs && node scripts/verify-sync-delete.mjs",
     "check:assets": "node scripts/verify-apk-assets.mjs"
   },
   "dependencies": {

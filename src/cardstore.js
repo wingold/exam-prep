@@ -1,6 +1,6 @@
 /* 知识卡片：卡片组（deck）+ 卡片 CRUD + 导入解析 + 间隔重复 */
 
-import db, { uid, now } from './db'
+import db, { uid, now, purge } from './db'
 import { nextSchedule, endOfToday } from './srs'
 
 /* ---------- 卡片组 ---------- */
@@ -21,8 +21,9 @@ export async function createDeck(name, source = '') {
 }
 
 export async function deleteDeck(deckId) {
-  await db.noteCards.where('deckId').equals(deckId).delete()
-  await db.decks.delete(deckId)
+  const cardIds = await db.noteCards.where('deckId').equals(deckId).primaryKeys()
+  await purge('noteCards', cardIds)
+  await purge('decks', [deckId])
 }
 
 export function normalizeCard(c) {

@@ -43,7 +43,9 @@ export const evalRating = (key) => SELF_EVAL.find((x) => x.key === key)?.rating 
    - 03450 公共部门人力资源管理：**2025 年起换过卷面**，现在按 2025/10、2026/4
      两套真题核对的结构为准：单选 15（每题 2 分）、多选 5、名词 5（3 分）、
      简答 4（5 分）、论述 1（10 分），另有案例分析 1×15。
-     2024/10 及以前是 10/5/5/5/2、名词 4 分简答 6 分论述 15 分的旧结构，已按新卷面改。
+     2024/10 及以前是 10/5/5/5/2、名词 4 分简答 6 分论述 15 分的旧结构（无案例、满分
+     100）。旧结构单独保留一条 `priority` 模板，只用于 2024/10 及更早的真题整卷，
+     靠「2024年10月」这类年份标记命中，不会抢通用科目名的匹配。
      **各题型分值与通用值不同**，所以试卷必须把分值随卷存库，
      否则交卷会把 100 分算成 85 分。
    材料题／案例题主观性太强，AI 出不好也判不了，统一不进组卷，
@@ -87,6 +89,23 @@ export const TEMPLATES = [
       { type: 'essay', count: 1, score: 10 },
     ],
   },
+  {
+    /* 旧卷面：2024/10 及以前。没有案例题，所以组卷满分就是 100。
+       priority 让它优先于通用科名匹配 —— 否则 2024/10 那套真题会被新模板抽走
+       5 道单选、少考 1 道论述，卷面从 100 分缩到 75 分。 */
+    id: '03450-legacy',
+    name: '公共部门人力资源管理 旧卷面（2024年及以前）',
+    subjects: ['2024年10月', '2023年10月', '2022年10月', '2021年10月', '2020年10月', '旧卷面'],
+    priority: 1,
+    note: '2024 年及以前的旧卷面 27 题、100 分：单选 10×1 + 多选 5×2 + 名词 5×4 + 简答 5×6 + 论述 2×15，无案例题',
+    sections: [
+      { type: 'single', count: 10, score: 1 },
+      { type: 'multi', count: 5, score: 2 },
+      { type: 'term', count: 5, score: 4 },
+      { type: 'short', count: 5, score: 6 },
+      { type: 'essay', count: 2, score: 15 },
+    ],
+  },
 ]
 
 export const DEFAULT_TEMPLATE_ID = TEMPLATES[0].id
@@ -101,6 +120,7 @@ export function templateTotal(t) {
 }
 
 /* 按科目名/课程代码猜模板：题库归属科目或题库名里带「城市管理学」「01680」都算命中。
+   命中多条时按 priority 取最具体的一条（旧卷面模板带年份标记，要压过通用科名）。
    猜不到返回 null，由界面保留上一次的选择，不要瞎套一套结构给考生。 */
 export function templateForSubject(...hints) {
   const text = hints
@@ -108,9 +128,9 @@ export function templateForSubject(...hints) {
     .map((s) => String(s))
     .join(' ')
   if (!text.trim()) return null
-  return (
-    TEMPLATES.find((t) => t.subjects.some((k) => text.includes(k))) || null
-  )
+  const hits = TEMPLATES.filter((t) => t.subjects.some((k) => text.includes(k)))
+  if (!hits.length) return null
+  return hits.slice().sort((a, b) => (b.priority || 0) - (a.priority || 0))[0]
 }
 
 /* 组卷缺题型时给出人话提示，而不是静默少题 */

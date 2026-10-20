@@ -40,8 +40,11 @@ export const evalRating = (key) => SELF_EVAL.find((x) => x.key === key)?.rating 
      简答 3、论述 1，另有案例分析 2×10。
    - 01680 城市管理学（精讲一刊载的题型表）：单选 20、多选 10、简答 5、
      论述 2，另有案例题 1×15。**这一科没有名词解释**。
+   - 03450 公共部门人力资源管理（2024/10 全国统考试卷原文）：单选 10、多选 5、
+     名词 5、简答 5、论述 2。**各题型分值与通用值不同**（名词 4 分、简答 6 分、
+     论述 15 分），所以试卷必须把分值随卷存库，否则交卷会把 100 分算成 80 分。
    材料题／案例题主观性太强，AI 出不好也判不了，统一不进组卷，
-   所以两套模板的组卷满分都是 80，界面必须显示满分而不是想当然的 100。 */
+   所以各模板的组卷满分不等于 100，界面必须显示实际满分而不是想当然的 100。 */
 export const TEMPLATES = [
   {
     id: '00261',
@@ -66,6 +69,19 @@ export const TEMPLATES = [
       { type: 'multi', count: 10, score: 2 },
       { type: 'short', count: 5, score: 5 },
       { type: 'essay', count: 2, score: 10 },
+    ],
+  },
+  {
+    id: '03450',
+    name: '自考公共部门人力资源管理卷（03450）',
+    subjects: ['公共部门人力资源管理', '03450'],
+    note: '全国统考卷面 27 题、100 分；名词解释 4 分、简答 6 分、论述 15 分',
+    sections: [
+      { type: 'single', count: 10, score: 1 },
+      { type: 'multi', count: 5, score: 2 },
+      { type: 'term', count: 5, score: 4 },
+      { type: 'short', count: 5, score: 6 },
+      { type: 'essay', count: 2, score: 15 },
     ],
   },
 ]

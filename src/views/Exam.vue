@@ -28,6 +28,9 @@ function setTemplate(id) {
   templateId.value = id
   localStorage.setItem(TEMPLATE_KEY, id)
 }
+/* 当前试卷的题型分值表（按模板走）。为空表示自定义卷或旧试卷，回落到题型默认分。 */
+const scoreMap = ref(null)
+const paperScore = (type) => scoreMap.value?.[type] ?? typeScore(type)
 // 主观题自评：qid → 'hit' | 'half' | 'miss'
 const selfEval = ref({})
 const evalAttemptId = new Map() // qid → attempts.id，改档时更新同一条记录
@@ -169,6 +172,14 @@ async function startExam() {
     picked = qs.length <= customCount.value ? qs : shuffle(qs).slice(0, n)
   }
 
+  /* 各题型分值来自模板而非全局默认值：03450 的名词解释是 4 分、简答 6 分、
+     论述 15 分，与通用值（3/5/10）不同。分值随试卷存库，历史报告重开时
+     才不会按通用值把 100 分的卷子算成 80 分。 */
+  const scores =
+    paperMode.value === 'template'
+      ? Object.fromEntries(tmpl.value.sections.map((s) => [s.type, s.score]))
+      : null
+  scoreMap.value = scores
   const paperId = uid()
   await db.papers.put({
     id: paperId,
@@ -177,6 +188,7 @@ async function startExam() {
     chapter: chapterFilter.value,
     timeLimitMin: timeLimit.value,
     createdAt: now(),
+    ...(scores ? { scores } : {}),
   })
   exam.value = {
     paperId,
@@ -366,6 +378,8 @@ async function viewReport(r) {
   reportQs.value = paper
     ? (await Promise.all(paper.questionIds.map((id) => db.questions.get(id)))).filter(Boolean)
     : []
+  // 旧试卷没有存分值，回落到题型默认分
+  scoreMap.value = paper?.scores || null
   // 恢复已保存的自评结果（历史报告点开时也能看到上次是怎么评的）
   selfEval.value = { ...(r.selfEval || {}) }
   evalAttemptId.clear()
@@ -386,7 +400,7 @@ function recomputeScore(persist = false) {
   let got = 0
   let max = 0
   for (const q of reportQs.value) {
-    const sc = typeScore(q.type)
+    const sc = paperScore(q.type)
     max += sc
     if (needsSelfEval(q)) got += sc * evalRatio(selfEval.value[q.id])
     else if (!wrongSet.has(q.id)) got += sc
@@ -524,7 +538,7 @@ onUnmounted(() => {
 
         <div v-for="(q, i) in subjList" :key="q.id" style="padding: 14px 0" :style="i ? { borderTop: '1px solid var(--line)' } : {}">
           <div class="row between" style="margin-bottom: 6px; gap: 8px">
-            <span class="tag">{{ typeLabel(q.type) }} · {{ typeScore(q.type) }} 分</span>
+            <span class="tag">{{ typeLabel(q.type) }} · {{ paperScore(q.type) }} 分</span>
             <span v-if="selfEval[q.id]" class="tag green">
               {{ SELF_EVAL.find((x) => x.key === selfEval[q.id])?.label }}
             </span>
@@ -629,7 +643,7 @@ onUnmounted(() => {
           :placeholder="typeHint(cur.type)"
         ></textarea>
         <div v-if="needsSelfEval(cur)" class="tiny" style="margin-top: 6px; color: var(--ink-3)">
-          {{ cur.type === 'term' ? '3 分题' : typeScore(cur.type) + ' 分题' }} · 交卷后对照参考答案自评
+          {{ paperScore(cur.type) }} 分题 · 交卷后对照参考答案自评
         </div>
       </div>
 

@@ -92,8 +92,11 @@
 ```bash
 npm install
 npm run dev        # http://localhost:5174
+npm run preview    # 同样是 http://localhost:5174（构建产物预览）
 ```
 生产构建：`npm run build`（产物在 `dist/`，任意静态服务器可托管；注意 WebDAV 同步在纯静态托管下需自建 Worker 代理，见 `cloudflare-worker.js`）。
+
+> **端口别改。** 浏览器按「协议 + 域名 + 端口」隔离 `IndexedDB` / `localStorage`，换端口或改用 IP（如 `127.0.0.1` 换成 `10.x.x.x`）看到的都是**另一份空数据**，题库、作答记录、WebDAV 与 AI 配置全部要重来——原来的数据并没有丢，回到旧地址即可。所以 `dev` 与 `preview` 都用 5174，并设了 `strictPort`：端口被占用时直接报错，而不是悄悄换到 5175 让你以为数据没了。同理，预览不能用 `--port 4173` 之类的参数覆盖。
 
 **安卓 APK**
 - 从 Release 下载安装，或自行构建（见下文「构建 APK」）。

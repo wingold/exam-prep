@@ -12,6 +12,8 @@ import Icon from '../components/Icon.vue'
 const isNative = Capacitor.isNativePlatform()
 // 由 vite define 注入，取自 package.json（与 Android versionName 同源）
 const appVersion = __APP_VERSION__
+// 浏览器里用来看清「现在这份数据属于哪个站点」——换端口/换地址就是另一份空数据
+const siteOrigin = (!isNative && typeof location !== 'undefined') ? location.origin : ''
 
 const file = ref(null)
 const msg = ref('')
@@ -211,6 +213,10 @@ async function doImport(ev, mode) {
         <div><div class="tiny">题目</div><div style="font-size: 22px; font-weight: 700">{{ stats.questions }}</div></div>
         <div><div class="tiny">作答记录</div><div style="font-size: 22px; font-weight: 700">{{ stats.attempts }}</div></div>
         <div><div class="tiny">错题</div><div style="font-size: 22px; font-weight: 700">{{ stats.wrong }}</div></div>
+      </div>
+      <div v-if="siteOrigin" class="tiny" style="margin-top: 10px; color: var(--ink-3); line-height: 1.7">
+        当前站点 <b>{{ siteOrigin }}</b>。浏览器按「协议 + 域名 + 端口」隔离数据，
+        换端口（如 5174 → 4173）或改用 IP 访问，看到的都是另一份空数据，与本机数据无关。
       </div>
     </div>
 

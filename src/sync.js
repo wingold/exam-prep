@@ -73,13 +73,22 @@ export function validateDavUrl(url) {
   return null
 }
 
+/* 是否由本机的 vite（dev / preview）提供页面。
+   npm run preview 加载的是构建产物，import.meta.env.DEV 为 false，
+   但它同样挂在 vite 的中间件上、同样有 /dav-sync，所以不能只认 DEV。 */
+function onLocalHost() {
+  if (typeof location === 'undefined') return false
+  const h = location.hostname
+  return h === 'localhost' || h === '127.0.0.1' || h === '0.0.0.0' || h === '[::1]'
+}
+
 /* 当前生效的代理基址 */
 export function activeProxyBase() {
   const c = getWebdavConfig()
   const custom = (c.proxy || '').trim().replace(/\/+$/, '')
   if (custom) return custom
-  // dev 用 vite 同源代理；其他环境留空 → 直连（会失败，但保留逃生通道）
-  if (import.meta.env.DEV) return '/dav-sync'
+  // 本机 vite（dev 或 preview）用同源代理；公网部署 / 直开 dist 留空 → 直连（会失败，但保留逃生通道）
+  if (import.meta.env.DEV || onLocalHost()) return '/dav-sync'
   return ''
 }
 

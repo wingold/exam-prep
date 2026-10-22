@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import db, { uid, now, purge } from '../db'
+import db, { uid, now, purge, plain } from '../db'
 import { isCorrect, isKeyQuestion, needsSelfEval } from '../importers'
 import { typeLabel, typeHint, typeScore, TEMPLATES, DEFAULT_TEMPLATE_ID, templateById, templateTotal, templateForSubject, SELF_EVAL, evalRatio } from '../questiontypes'
 import { enrollCard, rateCard } from '../srs'
@@ -20,6 +20,16 @@ const chapterFilter = ref('')
 const keyOnly = ref(false)
 // 组卷方式：按真题卷结构（默认）或自定义题量
 const paperMode = ref('template')
+/* 答案公布时机：
+   after —— 交卷后统一公布（默认，模拟真实考试，做题时不剧透）
+   each  —— 每题作答后立刻公布，客观题当场判对错、主观题对照参考答案自评，再进下一题。
+            适合「做完一题马上巩固/纠正」，代价是失去模考的临场感。 */
+const ANSWER_MODE_KEY = 'exam_answer_mode'
+const answerMode = ref(localStorage.getItem(ANSWER_MODE_KEY) || 'after')
+function setAnswerMode(m) {
+  answerMode.value = m
+  localStorage.setItem(ANSWER_MODE_KEY, m)
+}
 // 卷面模板：各科结构不同（有的带名词解释、有的没有），按题库的科目自动匹配，也可手选
 const TEMPLATE_KEY = 'exam_paper_template'
 const templateId = ref(localStorage.getItem(TEMPLATE_KEY) || DEFAULT_TEMPLATE_ID)
@@ -66,6 +76,11 @@ function saveDraft() {
       startedAt: e.startedAt,
       timeLimitMin: e.timeLimitMin,
       deadlineAt: e.deadlineAt,
+      // 逐题公布模式下要把「已公布到哪题」和「主观题自评」一起存，
+      // 否则切走再回来会重复公布、自评也白评了
+      answerMode: answerMode.value,
+      revealed: e.revealed || {},
+      selfEval: e.selfEval || {},
     }))
   } catch { /* 存储写满或被禁用时静默降级，不影响本次考试 */ }
 }
@@ -200,6 +215,9 @@ async function startExam() {
     startedAt: now(),
     timeLimitMin: timeLimit.value,
     deadlineAt: now() + timeLimit.value * 60 * 1000,
+    // 逐题公布：记已公布的题与主观题自评档位，交卷时一并落库
+    revealed: {},
+    selfEval: {},
   }
   submitted.value = false
   selfEval.value = {}
@@ -239,7 +257,10 @@ function resumeDraft() {
     startedAt: raw.startedAt || now(),
     timeLimitMin: raw.timeLimitMin || 30,
     deadlineAt: raw.deadlineAt || now(),
+    revealed: raw.revealed || {},
+    selfEval: raw.selfEval || {},
   }
+  if (raw.answerMode === 'each' || raw.answerMode === 'after') setAnswerMode(raw.answerMode)
   if (raw.bankId) bankId.value = raw.bankId
   submitted.value = false
   draftInfo.value = null
@@ -264,8 +285,58 @@ function suspendExam() {
 const cur = computed(() => (exam.value ? exam.value.questions[exam.value.idx] : null))
 const curChosen = computed(() => (cur.value ? exam.value.answers[cur.value.id] || [] : []))
 
+/* ===== 逐题公布答案（answerMode = 'each'） ===== */
+function revealedOf(q) {
+  return !!(q && exam.value && exam.value.revealed?.[q.id])
+}
+
+/* 公布当前题的答案。公布后本题锁定：不能再看答案改答案，否则分数没意义。 */
+function revealCur() {
+  const q = cur.value
+  if (!q || !exam.value) return
+  exam.value.revealed = { ...(exam.value.revealed || {}), [q.id]: true }
+}
+
+/* 「下一题」的两种含义：逐题模式下第一次点只是公布答案，第二次才真正翻页 */
+function nextStep() {
+  const e = exam.value
+  if (!e) return
+  if (answerMode.value === 'each' && !revealedOf(cur.value)) {
+    revealCur()
+    return
+  }
+  if (e.idx + 1 < e.questions.length) e.idx++
+}
+
+/* 当前题公布后的判定结果：客观题给对错，主观题给参考答案等考生自评 */
+const curReveal = computed(() => {
+  const q = cur.value
+  const e = exam.value
+  if (!q || !e || !revealedOf(q)) return null
+  const auto = !needsSelfEval(q)
+  const chosen = q.type === 'fill'
+    ? [(e.typed[q.id] || '').trim()]
+    : (e.answers[q.id] || [])
+  return {
+    auto,
+    chosen,
+    correct: auto ? isCorrect(q, chosen) : null,
+    answer: q.answer || [],
+    evalKey: (e.selfEval || {})[q.id] || '',
+  }
+})
+
+/* 答题时给主观题自评：结果先记在本次考试里，交卷时统一落库，
+   这样「作答 → 看答案 → 自评 → 下一题」能连贯做完，不必回报告页再点一遍。 */
+function evalInExam(q, key) {
+  if (!exam.value) return
+  exam.value.selfEval = { ...(exam.value.selfEval || {}), [q.id]: key }
+}
+
 function toggle(letter) {
   const q = cur.value
+  // 已公布答案的题锁定，避免「看了答案再改」
+  if (revealedOf(q)) return
   const arr = exam.value.answers[q.id] ? [...exam.value.answers[q.id]] : []
   if (q.type === 'multi') {
     const i = arr.indexOf(letter)
@@ -333,6 +404,15 @@ async function finish() {
   }
 
   const total = objTotal
+  /* 逐题模式下考生已在答题时自评过主观题，这里要一并落库，
+     否则交卷后报告页显示「未自评」、分数也只算客观题。 */
+  const evals = { ...(e.selfEval || {}) }
+  for (const q of e.questions) {
+    if (!needsSelfEval(q)) continue
+    const key = evals[q.id]
+    if (key) await writeEval(q, key, (e.typed[q.id] || '').trim())
+  }
+
   const result = {
     id: uid(),
     paperId: e.paperId,
@@ -342,7 +422,10 @@ async function finish() {
     wrong: total - right,
     rate: total ? Math.round((right / total) * 100) : 0,
     subjectiveTotal: subjTotal,
-    selfEval: {},
+    selfEval: evals,
+    // 客观题的选项要留着，报告页才能逐题显示「我选了什么」。
+    // 旧版本报告没有这个字段，viewReport 会回退到 attempts 里找。
+    answers: { ...e.answers },
     // 主观题的作答原文留着，报告页自评时要跟参考答案对着看
     typed: { ...e.typed },
     durationSec: Math.min(e.timeLimitMin * 60, Math.max(0, Math.round((Date.now() - e.startedAt) / 1000))),
@@ -350,7 +433,10 @@ async function finish() {
     wrongQids,
     at: now(),
   }
-  await db.results.put(result)
+  /* result.answers 里的数组来自 exam.value（Vue 响应式 Proxy），
+     IndexedDB 的结构化克隆拒绝 Proxy，直接 put 会抛 DataCloneError，
+     表现就是「点了交卷没反应、停在答题页」。入库前统一转成纯对象。 */
+  await db.results.put(plain(result))
   reports.value = await db.results.orderBy('at').reverse().limit(20).toArray()
   // 交卷后延迟同步：一次考试几十条作答记录，别等下一次启动才上传
   scheduleSync(10000)
@@ -371,6 +457,8 @@ function abandon() {
 const report = ref(null)
 const reportQs = ref([])
 const showReport = ref(false)
+const reportAttempts = ref({}) // qid → 本次考试的 attempt，用于回填客观题作答
+const detailFilter = ref('all') // all | wrong | subj
 
 async function viewReport(r) {
   report.value = r
@@ -383,6 +471,31 @@ async function viewReport(r) {
   // 恢复已保存的自评结果（历史报告点开时也能看到上次是怎么评的）
   selfEval.value = { ...(r.selfEval || {}) }
   evalAttemptId.clear()
+  detailFilter.value = 'all'
+
+  /* 逐题解析要显示「我选了什么」「我写了什么」，而作答分散在两处：
+     客观题在 results.answers（新报告才有），主观题原文在 results.typed，
+     更早的报告连 answers 都没有，只能回 attempts 里找本次考试写入的那条。
+     时间窗口 5 分钟：交卷与自评落库都紧接在 r.at 之后完成，
+     拉开太大就会误取到「同一题在另一次考试里」的记录。 */
+  reportAttempts.value = {}
+  if (reportQs.value.length) {
+    const ids = reportQs.value.map((q) => q.id)
+    const ats = await db.attempts.where('questionId').anyOf(ids).toArray()
+    const byQ = {}
+    for (const a of ats) {
+      if (a.mode !== 'exam') continue
+      if (Math.abs((a.at || 0) - (r.at || 0)) > 300000) continue
+      if (!byQ[a.questionId] || (a.at || 0) > (byQ[a.questionId].at || 0)) byQ[a.questionId] = a
+    }
+    reportAttempts.value = byQ
+    // 历史报告改档时要更新原来那条作答记录，不能又新建一行
+    for (const q of reportQs.value) {
+      const a = byQ[q.id]
+      if (a && needsSelfEval(q)) evalAttemptId.set(q.id, a.id)
+    }
+  }
+
   showReport.value = true
   recomputeScore()
 }
@@ -390,6 +503,74 @@ async function viewReport(r) {
 /* 报告里的主观题：交卷时判不了分，需要考生对照参考答案自评 */
 const subjList = computed(() => reportQs.value.filter((q) => needsSelfEval(q)))
 const evalDone = computed(() => subjList.value.filter((q) => selfEval.value[q.id]).length)
+
+/* ---- 逐题解析 ----
+   原来报告页只告诉考生「错了几道、已加入错题本」，答对的题连题干和答案都看不到，
+   考完想马上巩固错的、回看对的都做不到。这里把所有题目按题号摊开：
+   题干、选项、我选了什么、正确答案、解析，主观题就在这一行里自评。 */
+
+/* 我在这道题上的作答：优先取本次报告存的，其次回退到 attempts */
+function chosenFor(q) {
+  const saved = report.value?.answers?.[q.id]
+  if (Array.isArray(saved) && saved.length) return saved
+  const a = reportAttempts.value[q.id]
+  if (a && Array.isArray(a.chosen) && a.chosen.length) return a.chosen
+  if (needsSelfEval(q)) return []
+  if (q.type === 'fill') {
+    const t = (report.value?.typed?.[q.id] || '').trim()
+    return t ? [t] : []
+  }
+  return []
+}
+
+const detailRows = computed(() => {
+  const r = report.value
+  if (!r) return []
+  const wrongSet = new Set(r.wrongQids || [])
+  const rows = reportQs.value.map((q, i) => {
+    const auto = !needsSelfEval(q)
+    const evalKey = selfEval.value[q.id] || ''
+    const judged = auto || !!evalKey
+    return {
+      q,
+      no: i + 1,
+      auto,
+      chosen: chosenFor(q),
+      evalKey,
+      judged,
+      // 客观题看对错集合；主观题只有自评「答对了」才算掌握
+      ok: auto ? !wrongSet.has(q.id) : evalKey === 'hit',
+      score: paperScore(q.type),
+      typed: (r.typed?.[q.id] || '').trim(),
+    }
+  })
+  if (detailFilter.value === 'wrong') return rows.filter((x) => x.judged && !x.ok)
+  if (detailFilter.value === 'subj') return rows.filter((x) => !x.auto)
+  return rows
+})
+
+const detailCounts = computed(() => {
+  const r = report.value
+  const rows = reportQs.value.map((q) => {
+    const auto = !needsSelfEval(q)
+    const evalKey = selfEval.value[q.id] || ''
+    const judged = auto || !!evalKey
+    const ok = auto ? !new Set(r?.wrongQids || []).has(q.id) : evalKey === 'hit'
+    return { auto, judged, ok }
+  })
+  return {
+    all: rows.length,
+    wrong: rows.filter((x) => x.judged && !x.ok).length,
+    subj: rows.filter((x) => !x.auto).length,
+  }
+})
+
+/* 某道客观题的选项该显示成什么状态：正确答案标绿、选错的标红 */
+function optState(q, letter) {
+  const isRight = (q.answer || []).includes(letter)
+  const mine = chosenFor(q).includes(letter)
+  return { isRight, mine, wrongPick: mine && !isRight }
+}
 
 /* 得分按题型的真实分值累加：客观题看对错，主观题看自评档位。
    百分制只在卷面题量与真题一致时才有意义，所以同时给出满分供参考。 */
@@ -413,18 +594,14 @@ function recomputeScore(persist = false) {
   }
 }
 
-/* 自评允许改档：考生看完参考答案常会发现点错了。
-   改档要同步三处，否则分数、错题本、复习排期会互相打架：
-   作答记录（同一题只留一行，改 correct）、错题本（该进就进、该出就出）、记忆卡评分。 */
-async function applyEval(q, key) {
-  if (selfEval.value[q.id] === key) return
-  const prev = selfEval.value[q.id]
-  selfEval.value = { ...selfEval.value, [q.id]: key }
-  recomputeScore(true)
-
+/* 把一次主观题自评落到三个地方，缺一个就会互相打架：
+   作答记录（同一题只留一行，改档时 update）、错题本（该进就进、该出就出）、记忆卡评分。
+   报告页改档与「交卷时批量落库」共用这一段，避免两套逻辑走偏。 */
+async function writeEval(q, key, typed) {
   const ok = key === 'hit'
-  const typed = (report.value?.typed?.[q.id] || '').trim()
   const attemptId = evalAttemptId.get(q.id)
+  // 没有 attemptId = 这道题第一次评；有 = 改档，错题次数不再累加
+  const firstTime = !attemptId
   if (attemptId) {
     await db.attempts.update(attemptId, { correct: ok })
   } else {
@@ -432,19 +609,19 @@ async function applyEval(q, key) {
     evalAttemptId.set(q.id, aid)
     await db.attempts.put({
       id: aid, questionId: q.id, bankId: q.bankId, mode: 'exam',
-      chosen: [typed], correct: ok, at: now(),
+      chosen: [typed || ''], correct: ok, at: now(),
     })
   }
 
   const exist = await db.wrongItems.where('questionId').equals(q.id).first()
   if (ok) {
-    // 改判为答对：从错题本撤掉，别让已经掌握了的题继续占位
+    // 判为答对：从错题本撤掉，别让已经掌握了的题继续占位
     if (exist) await purge('wrongItems', [exist.id])
     await rateCard(q.id, 'good')
   } else {
     if (exist) {
       await db.wrongItems.update(exist.id, {
-        wrongCount: (exist.wrongCount || 1) + (prev ? 0 : 1),
+        wrongCount: (exist.wrongCount || 1) + (firstTime ? 1 : 0),
         status: 'active', rightStreak: 0, updatedAt: now(),
       })
     } else {
@@ -456,6 +633,14 @@ async function applyEval(q, key) {
     await enrollCard(q.id, { lapsed: true })
     await rateCard(q.id, key === 'half' ? 'hard' : 'again')
   }
+}
+
+/* 自评允许改档：考生看完参考答案常会发现点错了 */
+async function applyEval(q, key) {
+  if (selfEval.value[q.id] === key) return
+  selfEval.value = { ...selfEval.value, [q.id]: key }
+  recomputeScore(true)
+  await writeEval(q, key, (report.value?.typed?.[q.id] || '').trim())
   scheduleSync(8000)
 }
 
@@ -516,6 +701,20 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <div
+        v-if="subjList.length && evalDone < subjList.length"
+        class="card"
+        style="margin-bottom: 16px; border-color: var(--amber); background: var(--amber-weak)"
+      >
+        <div style="font-size: 14px; font-weight: 700; color: var(--amber)">
+          还有 {{ subjList.length - evalDone }} 道主观题没自评
+        </div>
+        <div class="tiny" style="margin-top: 5px; line-height: 1.7">
+          当前 {{ report.score }} 分只含客观题与已自评的主观题。名词解释、简答、论述没有唯一表述，
+          系统判不了，往下翻到「逐题答案与解析」对照参考答案给自己定档，分数会实时更新。
+        </div>
+      </div>
+
       <div v-if="avgCompare" class="card" style="margin-bottom: 16px">
         <span class="muted">与历史平均对比：平均 {{ avgCompare.avg }}%，本次</span>
         <b :style="{ color: avgCompare.delta >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 6 }">
@@ -523,74 +722,132 @@ onUnmounted(() => {
         </b>
       </div>
 
-      <!-- 主观题自评：系统判不了主观题的表述，只能由考生对照参考答案确认 -->
-      <div v-if="subjList.length" class="card" style="margin-bottom: 16px">
+      <!-- 逐题答案与解析：交卷后把所有题目摊开，答对的也能回看巩固 -->
+      <div class="card" style="margin-bottom: 16px">
         <div class="row between wrap" style="gap: 10px; margin-bottom: 4px">
-          <h3 style="font-size: 15px; font-weight: 700">主观题自评</h3>
-          <span class="tag" :class="evalDone === subjList.length ? 'green' : 'red'">
-            已评 {{ evalDone }} / {{ subjList.length }}
+          <h3 style="font-size: 15px; font-weight: 700">逐题答案与解析</h3>
+          <span class="tiny" style="color: var(--ink-3)">
+            客观 {{ report.right }}/{{ report.total }} 对<span v-if="subjList.length"> · 主观已评 {{ evalDone }}/{{ subjList.length }}</span>
           </span>
         </div>
         <div class="tiny" style="margin-bottom: 12px; color: var(--ink-3); line-height: 1.7">
-          名词解释、简答、论述没有唯一表述，无法自动判分。请对照参考答案给自己定档，
-          选「答了一半」按 60% 计分，只有「答对了」才算掌握、不进错题本。
+          答对的也建议扫一眼解析，别让「蒙对」混过去；主观题就在题目下方自评，评完分数实时更新。
         </div>
 
-        <div v-for="(q, i) in subjList" :key="q.id" style="padding: 14px 0" :style="i ? { borderTop: '1px solid var(--line)' } : {}">
-          <div class="row between" style="margin-bottom: 6px; gap: 8px">
-            <span class="tag">{{ typeLabel(q.type) }} · {{ paperScore(q.type) }} 分</span>
-            <span v-if="selfEval[q.id]" class="tag green">
-              {{ SELF_EVAL.find((x) => x.key === selfEval[q.id])?.label }}
+        <div class="row wrap" style="gap: 8px">
+          <button class="btn sm" :class="detailFilter === 'all' ? '' : 'ghost'" @click="detailFilter = 'all'">
+            全部 {{ detailCounts.all }}
+          </button>
+          <button class="btn sm" :class="detailFilter === 'wrong' ? '' : 'ghost'" @click="detailFilter = 'wrong'">
+            错题 {{ detailCounts.wrong }}
+          </button>
+          <button
+            v-if="detailCounts.subj"
+            class="btn sm"
+            :class="detailFilter === 'subj' ? '' : 'ghost'"
+            @click="detailFilter = 'subj'"
+          >主观题 {{ detailCounts.subj }}</button>
+        </div>
+
+        <div v-if="!detailRows.length" class="tiny" style="padding: 14px 0; color: var(--ink-3)">
+          {{ detailFilter === 'wrong' ? '这次没有错题 ✓' : '没有符合条件的题目' }}
+        </div>
+
+        <div
+          v-for="row in detailRows"
+          :key="row.q.id"
+          style="padding: 16px 0"
+          :style="{ borderTop: '1px solid var(--line)' }"
+        >
+          <div class="row between wrap" style="margin-bottom: 8px; gap: 8px">
+            <div class="row" style="gap: 8px">
+              <b style="font-size: 14px">{{ row.no }}.</b>
+              <span class="tag">{{ typeLabel(row.q.type) }} · {{ row.score }} 分</span>
+              <span class="tiny" v-if="row.q.chapter" style="color: var(--ink-3)">{{ row.q.chapter }}</span>
+            </div>
+            <span
+              class="tag"
+              :class="row.judged ? (row.ok ? 'green' : 'red') : 'amber'"
+            >
+              {{ row.auto
+                ? (row.ok ? '答对' : '答错')
+                : (row.judged ? '自评：' + (SELF_EVAL.find((e) => e.key === row.evalKey)?.label || '') : '待自评') }}
             </span>
           </div>
-          <div style="font-size: 15px; font-weight: 600; white-space: pre-wrap; margin-bottom: 10px">{{ q.stem }}</div>
 
-          <div v-if="report.typed && report.typed[q.id]" style="margin-bottom: 10px">
-            <div class="tiny" style="color: var(--ink-3); margin-bottom: 3px">我的作答</div>
-            <div class="tiny" style="background: var(--bg); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.8">{{ report.typed[q.id] }}</div>
-          </div>
-          <div>
-            <div class="tiny" style="color: var(--ink-3); margin-bottom: 3px">参考答案</div>
-            <div class="tiny" style="background: var(--green-weak); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.8">{{ (q.answer || []).join('\n') }}</div>
-          </div>
-          <div v-if="q.analysis" class="tiny" style="margin-top: 8px; color: var(--ink-2); line-height: 1.7">{{ q.analysis }}</div>
+          <div style="font-size: 15px; font-weight: 600; white-space: pre-wrap; margin-bottom: 10px">{{ row.q.stem }}</div>
 
-          <div class="row wrap" style="gap: 8px; margin-top: 10px">
-            <button
-              v-for="e in SELF_EVAL"
-              :key="e.key"
-              class="btn sm"
-              :class="selfEval[q.id] === e.key ? '' : 'ghost'"
-              :style="selfEval[q.id] === e.key ? { background: e.key === 'hit' ? 'var(--green)' : e.key === 'half' ? 'var(--amber)' : 'var(--red)' } : {}"
-              @click="applyEval(q, e.key)"
-            >{{ e.label }}</button>
+          <!-- 客观题选项：正确答案标绿，选错项标红 -->
+          <div
+            v-if="['single', 'multi', 'judge'].includes(row.q.type)"
+            style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px"
+          >
+            <div
+              v-for="(opt, i) in (row.q.type === 'judge' && !row.q.options.length ? ['对', '错'] : row.q.options)"
+              :key="i"
+              class="tiny"
+              style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); line-height: 1.7"
+              :style="optState(row.q, row.q.type === 'judge' ? opt : 'ABCDEF'[i]).isRight
+                ? { borderColor: 'var(--green)', background: 'var(--green-weak)' }
+                : optState(row.q, row.q.type === 'judge' ? opt : 'ABCDEF'[i]).wrongPick
+                  ? { borderColor: 'var(--red)', background: 'var(--red-weak)' }
+                  : {}"
+            >
+              <b v-if="row.q.type !== 'judge'">{{ 'ABCDEF'[i] }}.</b> {{ opt }}
+              <b
+                v-if="optState(row.q, row.q.type === 'judge' ? opt : 'ABCDEF'[i]).isRight"
+                style="color: var(--green)"
+              >　✓ 正确答案</b>
+              <b
+                v-else-if="optState(row.q, row.q.type === 'judge' ? opt : 'ABCDEF'[i]).wrongPick"
+                style="color: var(--red)"
+              >　✗ 你选的</b>
+            </div>
           </div>
+
+          <div v-if="row.auto" class="tiny" style="margin-bottom: 8px; line-height: 1.8">
+            <span style="color: var(--ink-3)">我的作答：</span>
+            <b v-if="row.chosen.length">{{ row.chosen.join('、') }}</b>
+            <b v-else style="color: var(--amber)">未作答</b>
+            <span style="color: var(--ink-3); margin-left: 14px">正确答案：</span>
+            <b style="color: var(--green)">{{ (row.q.answer || []).join('、') }}</b>
+          </div>
+
+          <template v-else>
+            <div v-if="row.typed" style="margin-bottom: 10px">
+              <div class="tiny" style="color: var(--ink-3); margin-bottom: 3px">我的作答</div>
+              <div class="tiny" style="background: var(--bg); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.8">{{ row.typed }}</div>
+            </div>
+            <div v-else class="tiny" style="margin-bottom: 10px; color: var(--amber)">未作答</div>
+            <div>
+              <div class="tiny" style="color: var(--ink-3); margin-bottom: 3px">参考答案</div>
+              <div class="tiny" style="background: var(--green-weak); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.8">{{ (row.q.answer || []).join('\n') }}</div>
+            </div>
+            <div class="row wrap" style="gap: 8px; margin-top: 10px">
+              <button
+                v-for="e in SELF_EVAL"
+                :key="e.key"
+                class="btn sm"
+                :class="selfEval[row.q.id] === e.key ? '' : 'ghost'"
+                :style="selfEval[row.q.id] === e.key ? { background: e.key === 'hit' ? 'var(--green)' : e.key === 'half' ? 'var(--amber)' : 'var(--red)' } : {}"
+                @click="applyEval(row.q, e.key)"
+              >{{ e.label }}（{{ Math.round(e.ratio * 100) }}%）</button>
+            </div>
+          </template>
+
+          <div v-if="row.q.analysis" class="tiny" style="margin-top: 9px; color: var(--ink-2); line-height: 1.8">
+            <b>解析：</b>{{ row.q.analysis }}
+          </div>
+        </div>
+
+        <div v-if="report.wrongQids?.length" class="row wrap" style="gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line)">
+          <span class="tiny" style="color: var(--ink-3); line-height: 2">
+            本次 {{ report.wrongQids.length }} 道错题已加入错题本
+          </span>
+          <router-link to="/wrong"><button class="btn ghost sm">去错题本复习</button></router-link>
         </div>
       </div>
 
-      <div class="card" style="margin-bottom: 16px">
-        <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 10px">分章节表现</h3>
-        <table class="tbl">
-          <thead><tr><th>章节</th><th>对 / 总</th><th>正确率</th></tr></thead>
-          <tbody>
-            <tr v-for="r in chapterRows" :key="r.ch">
-              <td>{{ r.ch }}</td>
-              <td>{{ r.right }} / {{ r.total }}</td>
-              <td style="width: 40%">
-                <div class="row" style="gap: 8px">
-                  <div class="bar" style="flex: 1"><i :class="{ green: r.rate >= 70, amber: r.rate < 70 && r.rate >= 50 }" :style="{ width: r.rate + '%' }"></i></div>
-                  <span class="tiny" style="width: 36px">{{ r.rate }}%</span>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="card" v-if="report.wrongQids?.length">
-        <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 10px">错题（{{ report.wrongQids.length }}）已加入错题本</h3>
-        <router-link to="/wrong"><button class="btn ghost sm">去错题本复习</button></router-link>
-      </div>
     </template>
 
     <!-- ===== 考试中 ===== -->
@@ -629,6 +886,7 @@ onUnmounted(() => {
           class="card row"
           style="padding: 13px 16px; text-align: left; cursor: pointer; gap: 12px"
           :style="curChosen.includes(cur.type === 'judge' ? opt : 'ABCDEF'[i]) ? { borderColor: 'var(--accent)', background: 'var(--accent-weak)' } : {}"
+          :disabled="revealedOf(cur)"
           @click="toggle(cur.type === 'judge' ? opt : 'ABCDEF'[i])"
         >
           <b>{{ cur.type === 'judge' ? '' : 'ABCDEF'[i] + '.' }}</b>
@@ -641,16 +899,78 @@ onUnmounted(() => {
           :rows="needsSelfEval(cur) ? (cur.type === 'term' ? 4 : 6) : 3"
           v-model="exam.typed[cur.id]"
           :placeholder="typeHint(cur.type)"
+          :disabled="revealedOf(cur)"
         ></textarea>
         <div v-if="needsSelfEval(cur)" class="tiny" style="margin-top: 6px; color: var(--ink-3)">
-          {{ paperScore(cur.type) }} 分题 · 交卷后对照参考答案自评
+          {{ paperScore(cur.type) }} 分题 ·
+          {{ answerMode === 'each' ? '点「看答案」对照参考答案自评，再进下一题' : '交卷后对照参考答案自评' }}
+        </div>
+      </div>
+
+      <!-- 逐题公布：客观题当场判对错，主观题给参考答案由考生自评 -->
+      <div
+        v-if="curReveal"
+        class="card"
+        style="margin-bottom: 14px"
+        :style="{ borderColor: curReveal.auto ? (curReveal.correct ? 'var(--green)' : 'var(--red)') : 'var(--accent)' }"
+      >
+        <div class="row between wrap" style="gap: 8px; margin-bottom: 9px">
+          <b
+            style="font-size: 15px"
+            :style="{ color: curReveal.auto ? (curReveal.correct ? 'var(--green)' : 'var(--red)') : 'var(--accent)' }"
+          >
+            {{ curReveal.auto ? (curReveal.correct ? '✓ 答对了' : '✗ 答错了') : '对照参考答案给自己定档' }}
+          </b>
+          <span class="tag">{{ paperScore(cur.type) }} 分</span>
+        </div>
+
+        <div v-if="curReveal.auto" class="tiny" style="line-height: 1.9">
+          <span style="color: var(--ink-3)">我的作答：</span>
+          <b v-if="curReveal.chosen.length">{{ curReveal.chosen.join('、') }}</b>
+          <b v-else style="color: var(--amber)">未作答</b>
+          <span style="color: var(--ink-3); margin-left: 14px">正确答案：</span>
+          <b style="color: var(--green)">{{ curReveal.answer.join('、') }}</b>
+        </div>
+
+        <div v-else>
+          <div class="tiny" style="color: var(--ink-3); margin-bottom: 3px">参考答案</div>
+          <div
+            class="tiny"
+            style="background: var(--green-weak); padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; line-height: 1.8"
+          >{{ curReveal.answer.join('\n') }}</div>
+          <div class="row wrap" style="gap: 8px; margin-top: 10px">
+            <button
+              v-for="e in SELF_EVAL"
+              :key="e.key"
+              class="btn sm"
+              :class="curReveal.evalKey === e.key ? '' : 'ghost'"
+              :style="curReveal.evalKey === e.key ? { background: e.key === 'hit' ? 'var(--green)' : e.key === 'half' ? 'var(--amber)' : 'var(--red)' } : {}"
+              @click="evalInExam(cur, e.key)"
+            >{{ e.label }}（{{ Math.round(e.ratio * 100) }}%）</button>
+          </div>
+          <div class="tiny" style="margin-top: 8px; color: var(--ink-3); line-height: 1.7">
+            自评会计入分数：答对了不进错题本，答了一半按 60% 计分，没答出来进错题本并安排复习。
+          </div>
+        </div>
+
+        <div v-if="cur.analysis" class="tiny" style="margin-top: 9px; color: var(--ink-2); line-height: 1.8">
+          <b>解析：</b>{{ cur.analysis }}
         </div>
       </div>
 
       <div class="row between">
         <button class="btn ghost" :disabled="exam.idx === 0" @click="exam.idx--">上一题</button>
         <div class="row" style="gap: 8px">
-          <button v-if="exam.idx + 1 < exam.questions.length" class="btn" @click="exam.idx++">下一题</button>
+          <button
+            v-if="answerMode === 'each' && !revealedOf(cur)"
+            class="btn"
+            @click="nextStep"
+          >看答案</button>
+          <button
+            v-else-if="exam.idx + 1 < exam.questions.length"
+            class="btn"
+            @click="nextStep"
+          >下一题</button>
           <button class="btn danger" @click="finish">交卷</button>
         </div>
       </div>
@@ -777,6 +1097,23 @@ onUnmounted(() => {
             <span class="lab">时长（分钟）</span>
             <input class="input" type="number" min="1" v-model.number="timeLimit" />
           </label>
+        </div>
+
+        <div class="field">
+          <span class="lab">答案公布</span>
+          <div class="row" style="gap: 8px">
+            <button class="btn sm" :class="answerMode === 'after' ? '' : 'ghost'" @click="setAnswerMode('after')">
+              交卷后统一公布
+            </button>
+            <button class="btn sm" :class="answerMode === 'each' ? '' : 'ghost'" @click="setAnswerMode('each')">
+              每题作答后公布
+            </button>
+          </div>
+          <div class="tiny" style="margin-top: 8px; color: var(--ink-3); line-height: 1.7">
+            {{ answerMode === 'each'
+              ? '做完一题点「看答案」就能对答案：客观题当场判对错，主观题对照参考答案自评后再进下一题。适合边练边巩固，代价是失去模考的临场感。'
+              : '做题时不剧透，交卷后统一公布全部题目与解析。适合模考。' }}
+          </div>
         </div>
 
         <label class="row" style="margin-bottom: 12px; cursor: pointer; font-size: 14px">

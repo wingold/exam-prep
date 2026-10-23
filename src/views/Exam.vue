@@ -86,6 +86,9 @@ function saveDraft(pause = false) {
       // 主动暂停才写，恢复时用它重算截止时间；意外中断为 null，仍按 deadlineAt 走
       pausedRemainSec: pause ? remainSec : null,
       pausedAt: pause ? now() : null,
+      pauseCount: e.pauseCount || 0,
+      pausedSec: e.pausedSec || 0,
+      pauseStartedAt: e.pauseStartedAt || null,
       // 逐题公布模式下要把「已公布到哪题」和「主观题自评」一起存，
       // 否则切走再回来会重复公布、自评也白评了
       answerMode: answerMode.value,
@@ -233,6 +236,10 @@ async function startExam() {
     // 逐题公布：记已公布的题与主观题自评档位，交卷时一并落库
     revealed: {},
     selfEval: {},
+    // 暂停留痕：次数、已完成暂停的累计秒数、本次暂停的开始时刻
+    pauseCount: 0,
+    pausedSec: 0,
+    pauseStartedAt: null,
   }
   submitted.value = false
   selfEval.value = {}
@@ -278,6 +285,13 @@ function resumeDraft() {
     revealed: raw.revealed || {},
     selfEval: raw.selfEval || {},
   }
+  // 结算上次暂停：从暂停开始到现在的秒数累加进 pausedSec
+  const resumeGap = raw.pauseStartedAt
+    ? Math.max(0, Math.round((now() - raw.pauseStartedAt) / 1000))
+    : 0
+  exam.value.pauseCount = raw.pauseCount || 0
+  exam.value.pausedSec = (raw.pausedSec || 0) + resumeGap
+  exam.value.pauseStartedAt = null
   if (raw.answerMode === 'each' || raw.answerMode === 'after') setAnswerMode(raw.answerMode)
   if (raw.bankId) bankId.value = raw.bankId
   submitted.value = false
@@ -293,7 +307,11 @@ function resumeDraft() {
 
 /* 暂存并退出：保留排期与答案，回到总览；下次进考试页会提示恢复 */
 function suspendExam() {
-  // 主动暂存 → 冻结倒计时
+  // 主动暂存 → 冻结倒计时，并记一次暂停（回来结算时长）
+  if (exam.value) {
+    exam.value.pauseCount = (exam.value.pauseCount || 0) + 1
+    exam.value.pauseStartedAt = now()
+  }
   saveDraft(true)
   clearInterval(tick.value)
   exam.value = null
@@ -379,6 +397,16 @@ function fmt(s) {
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
 }
 
+/* 秒 → 「x 小时 y 分」/「y 分 z 秒」，用于暂停时长 */
+function fmtSpan(sec) {
+  const t = Math.max(0, Math.round(sec || 0))
+  const h = Math.floor(t / 3600)
+  const m = Math.floor((t % 3600) / 60)
+  if (h) return `${h} 小时 ${m} 分`
+  if (m) return `${m} 分 ${t % 60} 秒`
+  return `${t} 秒`
+}
+
 async function finish() {
   if (!exam.value || submitted.value) return
   submitted.value = true
@@ -447,7 +475,13 @@ async function finish() {
     answers: { ...e.answers },
     // 主观题的作答原文留着，报告页自评时要跟参考答案对着看
     typed: { ...e.typed },
-    durationSec: Math.min(e.timeLimitMin * 60, Math.max(0, Math.round((Date.now() - e.startedAt) / 1000))),
+    // 暂停期间既不计入倒计时，也不计作用时
+    durationSec: Math.min(
+      e.timeLimitMin * 60,
+      Math.max(0, Math.round((Date.now() - e.startedAt) / 1000) - (e.pausedSec || 0))
+    ),
+    pauseCount: e.pauseCount || 0,
+    pausedSec: e.pausedSec || 0,
     perChapter,
     wrongQids,
     at: now(),
@@ -727,8 +761,13 @@ onUnmounted(() => {
           <div class="muted" style="margin-top: 6px">客观题正确率 {{ report.right }}/{{ report.total }}</div>
         </div>
         <div class="card" style="text-align: center; padding: 24px">
-          <div class="bignum" style="color: var(--amber)">{{ Math.floor(report.durationSec / 60) }}<span style="font-size: 18px">分</span></div>
-          <div class="muted" style="margin-top: 6px">用时</div>
+          <div class="bignum" style="color: var(--amber)">
+            {{ report.durationSec < 60 ? report.durationSec : Math.floor(report.durationSec / 60) }}<span style="font-size: 18px">{{ report.durationSec < 60 ? '秒' : '分' }}</span>
+          </div>
+          <div class="muted" style="margin-top: 6px">用时{{ report.pauseCount ? '（不含暂停）' : '' }}</div>
+          <div v-if="report.pauseCount" class="tiny" style="margin-top: 6px; color: var(--amber); line-height: 1.6">
+            中途暂停 {{ report.pauseCount }} 次<br />累计 {{ fmtSpan(report.pausedSec) }}
+          </div>
         </div>
       </div>
 
@@ -1172,7 +1211,10 @@ onUnmounted(() => {
               <td><b>{{ r.score ?? '—' }}{{ r.scoreMax ? ' / ' + r.scoreMax : '' }}</b></td>
               <td><b :style="{ color: r.rate >= 60 ? 'var(--green)' : 'var(--red)' }">{{ r.rate }}%</b>
                 <span class="tiny" style="color: var(--ink-3)">（{{ r.right }}/{{ r.total }}）</span></td>
-              <td class="tiny">{{ Math.floor(r.durationSec / 60) }}分</td>
+              <td class="tiny">
+                {{ (r.durationSec || 0) < 60 ? (r.durationSec || 0) + '秒' : Math.floor(r.durationSec / 60) + '分' }}
+                <span v-if="r.pauseCount" style="color: var(--amber)">· 暂停 {{ r.pauseCount }} 次</span>
+              </td>
               <td><button class="btn ghost sm" @click="viewReport(r)">查看</button></td>
             </tr>
           </tbody>

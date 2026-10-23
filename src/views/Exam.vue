@@ -438,10 +438,16 @@ async function finish() {
      表现就是「点了交卷没反应、停在答题页」。入库前统一转成纯对象。 */
   await db.results.put(plain(result))
   reports.value = await db.results.orderBy('at').reverse().limit(20).toArray()
+  /* 报告页必须绑定「历史成绩列表里的同一条记录」。
+     早先这里传的是上面新建的 result 对象，它和 reports 里那条是两个引用：
+     报告页自评时改的是 result.score，列表里那条不动 ——
+     表现就是「自评完点返回，历史成绩显示 —，再点进去还是旧分数，
+     非得重新评一遍才更新」，看起来像分数没被记录（其实 DB 早就写进去了）。 */
+  const savedResult = reports.value.find((x) => x.id === result.id) || result
   // 交卷后延迟同步：一次考试几十条作答记录，别等下一次启动才上传
   scheduleSync(10000)
   clearDraft()
-  viewReport(result)
+  viewReport(savedResult)
   exam.value = null
 }
 
@@ -588,9 +594,15 @@ function recomputeScore(persist = false) {
   }
   r.score = Math.round(got * 10) / 10
   r.scoreMax = max
+  // 内存里的这条记录也要带上自评：从历史列表重新点进来时，
+  // viewReport 是从 r.selfEval 恢复档位的，不写回就会退回「未自评」
+  r.selfEval = { ...selfEval.value }
   if (persist) {
-    db.results.update(r.id, { score: r.score, scoreMax: max, selfEval: { ...selfEval.value } })
-      .catch(() => { /* 报告页只读展示，落盘失败不影响当前视图 */ })
+    /* 返回 Promise 让调用方 await：自评完马上点返回或刷新时，
+       写入可能还没完成，会读到旧分数。失败也不静默。 */
+    return db.results
+      .update(r.id, plain({ score: r.score, scoreMax: max, selfEval: { ...selfEval.value } }))
+      .catch((e) => console.warn('[exam] 保存自评分数失败', e))
   }
 }
 
@@ -639,7 +651,7 @@ async function writeEval(q, key, typed) {
 async function applyEval(q, key) {
   if (selfEval.value[q.id] === key) return
   selfEval.value = { ...selfEval.value, [q.id]: key }
-  recomputeScore(true)
+  await recomputeScore(true)
   await writeEval(q, key, (report.value?.typed?.[q.id] || '').trim())
   scheduleSync(8000)
 }

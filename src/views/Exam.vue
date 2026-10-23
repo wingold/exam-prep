@@ -55,16 +55,23 @@ const reports = ref([])
 
 /* ===== 续考草稿 =====
    模考中途被杀进程 / 切走太久，原来的 answers 全在组件内存里，重进就没了。
-   这里把答案、标记、当前题和「截止时间」写进 localStorage：
-   存 deadlineAt 而不是「剩余秒数」，避免关掉应用的那段时间不算在倒计时里。 */
+   这里把答案、标记、当前题和「截止时间」写进 localStorage。
+
+   两种离开要分开处理，否则「暂存」就和不保存没区别：
+   - 主动点「暂存并退出」：倒计时**冻结**，存下剩余秒数（pausedRemainSec），
+     回来接着走 —— 玩家自己按的暂停，理应算暂停。
+   - 意外离开（切走、被杀、路由跳走）：存绝对时间 deadlineAt，时间照走，
+     避免靠「不点交卷就退出」无限延长考试。
+   存绝对时间的另一个原因：切后台的那段时间本来也该计入考试。 */
 const DRAFT_KEY = 'exam_draft_v1'
 const draftInfo = ref(null) // { total, answered, remainSec, expired, startedAt, questions: [...] }
 let saveTimer = null
 
-function saveDraft() {
+function saveDraft(pause = false) {
   if (!exam.value || submitted.value) return
   const e = exam.value
   try {
+    const remainSec = Math.max(0, Math.round((e.deadlineAt - Date.now()) / 1000))
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
       paperId: e.paperId,
       bankId: bankId.value || e.questions[0]?.bankId || '',
@@ -76,6 +83,9 @@ function saveDraft() {
       startedAt: e.startedAt,
       timeLimitMin: e.timeLimitMin,
       deadlineAt: e.deadlineAt,
+      // 主动暂停才写，恢复时用它重算截止时间；意外中断为 null，仍按 deadlineAt 走
+      pausedRemainSec: pause ? remainSec : null,
+      pausedAt: pause ? now() : null,
       // 逐题公布模式下要把「已公布到哪题」和「主观题自评」一起存，
       // 否则切走再回来会重复公布、自评也白评了
       answerMode: answerMode.value,
@@ -105,14 +115,19 @@ async function detectDraft() {
   const answered = qs.filter((q) =>
     (d.answers?.[q.id] || []).length > 0 || (d.typed?.[q.id] || '').trim().length > 0
   ).length
-  const remainSec = Math.max(0, Math.round(((d.deadlineAt || 0) - Date.now()) / 1000))
+  // 主动暂存过：剩余时间原样取出，不算「已超时」；否则按绝对截止时间算
+  const paused = typeof d.pausedRemainSec === 'number'
+  const remainSec = paused
+    ? Math.max(0, d.pausedRemainSec)
+    : Math.max(0, Math.round(((d.deadlineAt || 0) - Date.now()) / 1000))
   draftInfo.value = {
     raw: d,
     questions: qs,
     total: qs.length,
     answered,
     remainSec,
-    expired: remainSec <= 0,
+    paused,
+    expired: !paused && remainSec <= 0,
   }
 }
 
@@ -256,7 +271,10 @@ function resumeDraft() {
     idx: Math.min(raw.idx || 0, d.questions.length - 1),
     startedAt: raw.startedAt || now(),
     timeLimitMin: raw.timeLimitMin || 30,
-    deadlineAt: raw.deadlineAt || now(),
+    // 暂停过的从剩余秒数重新起算，暂停的那段时间不算钱
+    deadlineAt: typeof raw.pausedRemainSec === 'number'
+      ? now() + raw.pausedRemainSec * 1000
+      : (raw.deadlineAt || now()),
     revealed: raw.revealed || {},
     selfEval: raw.selfEval || {},
   }
@@ -275,7 +293,8 @@ function resumeDraft() {
 
 /* 暂存并退出：保留排期与答案，回到总览；下次进考试页会提示恢复 */
 function suspendExam() {
-  saveDraft()
+  // 主动暂存 → 冻结倒计时
+  saveDraft(true)
   clearInterval(tick.value)
   exam.value = null
   submitted.value = false
@@ -1029,14 +1048,20 @@ onUnmounted(() => {
         <div class="row between wrap" style="gap: 12px; align-items: flex-start">
           <div style="min-width: 0; flex: 1">
             <div style="font-size: 14px; font-weight: 700">
-              {{ draftInfo.expired ? '上次考试已超时' : '上次考试未完成' }}
+              {{ draftInfo.expired ? '上次考试已超时' : draftInfo.paused ? '上次考试已暂停' : '上次考试未完成' }}
             </div>
             <div class="tiny" style="margin-top: 5px; line-height: 1.7">
               已答 {{ draftInfo.answered }} / {{ draftInfo.total }} 题 ·
-              {{ draftInfo.expired ? '限时已用完' : `剩余 ${fmt(draftInfo.remainSec)}` }}<br />
+              {{ draftInfo.expired
+                ? '限时已用完'
+                : draftInfo.paused
+                  ? `已暂停 · 剩余 ${fmt(draftInfo.remainSec)}`
+                  : `剩余 ${fmt(draftInfo.remainSec)}` }}<br />
               {{ draftInfo.expired
                 ? '可以按已答内容交卷计入成绩，也可以放弃这次考试。'
-                : '答案、标记存疑和倒计时都已保留，继续作答即可。' }}
+                : draftInfo.paused
+                  ? '这是你主动暂存的考试，倒计时已冻结，继续作答时从剩余时间接着走。'
+                  : '答案、标记存疑和倒计时都已保留（中途离开的时间照常计入），继续作答即可。' }}
             </div>
           </div>
           <div class="row" style="gap: 8px">
